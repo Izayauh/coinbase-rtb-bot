@@ -1,0 +1,37 @@
+exchange: coinbase_advanced
+portfolio_scope: trading_sleeve_v0
+
+symbols:
+  - BTC-USD
+
+timeframes:
+  signal: 1h
+  regime: 4h
+
+risk:
+  risk_per_trade: 0.0020
+  max_daily_loss: 0.010
+  max_weekly_loss: 0.025
+  shutdown_drawdown: 0.05
+
+setup:
+  breakout_lookback: 20
+  breakout_volume_mult: 1.25
+  breakout_rsi_min: 56
+  breakout_rsi_max: 74
+  retest_window_bars: 5
+  continuation_chase_atr_max: 0.8
+
+stops:
+  atr_period: 14
+  initial_stop_atr: 1.4
+  retest_buffer_atr: 0.25
+  runner_trail_atr: 1.8
+  time_stop_bars: 12
+
+execution:
+  entry_order_type: limit_ioc
+  max_entry_slippage_bps: 10
+  max_spread_bps: 8
+  reconcile_interval_sec: 5
+  ws_stale_timeout_sec: 15

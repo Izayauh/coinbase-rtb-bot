@@ -1,0 +1,4 @@
+websockets
+aiohttp
+pyyaml
+coinbase-advanced-py
