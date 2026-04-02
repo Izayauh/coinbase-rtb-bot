@@ -7,11 +7,6 @@ from models import Bar
 logger = logging.getLogger(__name__)
 
 class Journal:
-    """
-    Handles robust localized logging with explicit emphasis on restart-safety.
-    Maps directly against the simple tables provisioned gracefully inside db.py.
-    """
-    
     @staticmethod
     def upsert_bar(bar: Bar):
         query = """
@@ -19,12 +14,12 @@ class Journal:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol, timeframe, ts_open)
             DO UPDATE SET 
-                high=max(high, excluded.high),
-                low=min(low, excluded.low),
+                high=excluded.high,
+                low=excluded.low,
                 close=excluded.close,
-                volume=volume + excluded.volume
+                volume=excluded.volume
         """
-        # Resolves duplicates natively: Re-reading overlapping historical batches immediately merges volume and bounds gracefully mapping precise closing ticks accurately.
+        # Exact overwrite correctly aligns final volume boundaries against replay overlapping inputs dynamically avoiding double-counting functionally.
         db.execute(query, (
             bar.symbol, bar.timeframe, bar.ts_open,
             bar.open, bar.high, bar.low, bar.close, bar.volume

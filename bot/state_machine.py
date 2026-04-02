@@ -9,12 +9,11 @@ from db import db
 logger = logging.getLogger(__name__)
 
 class StateMachine:
-    # DEFINED STATES
     IDLE = "IDLE"
     WAITING_RETEST = "WAITING_RETEST"
     RETEST_CONFIRMED = "RETEST_CONFIRMED"
     SIGNAL_EMITTED = "SIGNAL_EMITTED"
-    COOLDOWN = "COOLDOWN"  # Reserved explicitly for structural failures locally
+    COOLDOWN = "COOLDOWN"
     DISABLED = "DISABLED"
 
     def __init__(self):
@@ -28,7 +27,6 @@ class StateMachine:
         self.last_1h_ts = 0
         self.last_4h_ts = 0
         
-        # Boot safely
         persisted = Journal.get_state("algo_state")
         if persisted:
             self.state = persisted.get("state", self.IDLE)
@@ -43,8 +41,6 @@ class StateMachine:
             
             rp = persisted.get("retest_bar")
             if rp: self.retest_bar = Bar(**rp)
-            
-            logger.info(f"State Machine Booted - Restart State: {self.state}")
 
     def _persist(self):
         Journal.upsert_state("algo_state", {
@@ -63,28 +59,46 @@ class StateMachine:
             return
             
         if len(bars_1h) < 25 or len(bars_4h) < 205:
-            return  # Require warmup history broadly before any evaluation
+            return
             
         latest_1h = bars_1h[-1]
         latest_4h = bars_4h[-1]
         
-        # Detect Bar Gaps precisely limiting systemic structural divergence tracking
-        if self.last_1h_ts and (latest_1h.ts_open - self.last_1h_ts) > 3600:
-            logger.warning(f"Gap detected on 1h bounds. Defensively isolating. Delta: {latest_1h.ts_open - self.last_1h_ts}s")
-            self.state = self.DISABLED
-            self._persist()
+        if latest_1h.ts_open == self.last_1h_ts and latest_4h.ts_open == self.last_4h_ts:
             return
+        
+        if self.last_1h_ts:
+            gap_1h = latest_1h.ts_open - self.last_1h_ts
+            if gap_1h <= 0:
+                logger.warning(f"1h sequence fault. Delta: {gap_1h}.")
+                return 
+            elif gap_1h > 3600:
+                self.state = self.DISABLED
+                self._persist()
+                return
+                
+        if self.last_4h_ts:
+            gap_4h = latest_4h.ts_open - self.last_4h_ts
+            if gap_4h <= 0:
+                return
+            elif gap_4h > 14400:
+                self.state = self.DISABLED
+                self._persist()
+                return
             
         self.last_1h_ts = latest_1h.ts_open
         self.last_4h_ts = latest_4h.ts_open
         
-        # Explicit evaluation branching logic
         if self.state == self.IDLE:
             self._eval_breakout(bars_1h, bars_4h)
         elif self.state == self.WAITING_RETEST:
             self._eval_retest(bars_1h, bars_4h)
         elif self.state == self.RETEST_CONFIRMED:
             self._eval_continuation(bars_1h, bars_4h)
+        elif self.state == self.SIGNAL_EMITTED:
+            self._eval_emitted()
+        elif self.state == self.COOLDOWN:
+            pass
             
         self._persist()
 
@@ -100,7 +114,6 @@ class StateMachine:
         
         rsi = Indicators.calc_rsi([b.close for b in bars_1h])
         
-        # Breakout Requirements explicitly mapped identically
         if latest.close <= highest_20: return
         if latest.volume <= 1.25 * avg_vol_20: return
         
@@ -116,34 +129,35 @@ class StateMachine:
         self.breakout_bar = latest
         self.breakout_level = highest_20
         self.bars_since_breakout = 0
-        logger.info(f"Breakout Structure Identified: Close {latest.close} > Highest_20 {highest_20}")
 
     def _eval_retest(self, bars_1h: List[Bar], bars_4h: List[Bar]):
         if not is_bullish_regime(bars_4h):
-            self._reset() 
+            self._reset_to_idle() 
             return
             
         self.bars_since_breakout += 1
         if self.bars_since_breakout > 5:
-            # Retest Timeout explicitly drops back IDLE naturally safely avoiding generic COOLDOWNS structurally
-            self._reset()
+            self._reset_to_idle()
             return
             
         latest = bars_1h[-1]
         bo_midpoint = (self.breakout_bar.high + self.breakout_bar.low) / 2
+        atr = Indicators.calc_atr(bars_1h, 14)[-1]
         
-        touches_zone = latest.low <= self.breakout_level + (self.breakout_bar.high - self.breakout_level) * 0.3
+        upper_zone = self.breakout_level + (self.breakout_bar.high - self.breakout_level) * 0.3
+        lower_zone = self.breakout_level - atr * 0.5
+        
+        touches_zone = lower_zone <= latest.low <= upper_zone
         closes_above = latest.close > self.breakout_level
         closes_above_mid = latest.close > bo_midpoint
         
         if touches_zone and closes_above and closes_above_mid:
             self.state = self.RETEST_CONFIRMED
             self.retest_bar = latest
-            logger.info("Retest Successfully Assuring Trailing Midpoint Natively Captured.")
 
     def _eval_continuation(self, bars_1h: List[Bar], bars_4h: List[Bar]):
         if not is_bullish_regime(bars_4h):
-            self._reset()
+            self._reset_to_idle()
             return
 
         latest = bars_1h[-1]
@@ -153,9 +167,8 @@ class StateMachine:
         if latest.close > self.retest_bar.high:
             atr = Indicators.calc_atr(bars_1h, 14)[-1]
             
-            # Avoid chasing aggressively past breakout boundaries structurally conservatively
             if (latest.close - self.breakout_level) > (0.8 * atr):
-                self._reset() 
+                self._reset_to_idle() 
                 return
                 
             self.state = self.SIGNAL_EMITTED
@@ -171,10 +184,13 @@ class StateMachine:
                 f"ATR:{atr}_LEVEL:{self.breakout_level}", self.breakout_level, 
                 self.retest_bar.low, atr, cur_rsi, "NEW"
             ))
-            logger.info(f"Signal {self.setup_id} persisted securely actively.")
 
-    def _reset(self):
-        # Exclusively returns IDLE instead of COOLDOWN explicitly
+    def _eval_emitted(self):
+        rows = db.fetch_all("SELECT * FROM positions WHERE state IN ('OPEN', 'PENDING')")
+        if not rows:
+            self._reset_to_idle()
+
+    def _reset_to_idle(self):
         self.state = self.IDLE
         self.setup_id = None
         self.breakout_bar = None

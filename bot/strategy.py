@@ -10,39 +10,40 @@ class Indicators:
         if len(prices) < period:
             return [None] * len(prices)
         
-        ema = [None] * (period - 1)
-        # initial SMA
+        ema = [None] * len(prices)
         current_ema = sum(prices[:period]) / period
-        ema.append(current_ema)
+        ema[period - 1] = current_ema
         
         multiplier = 2 / (period + 1)
-        for price in prices[period:]:
-            current_ema = (price - current_ema) * multiplier + current_ema
-            ema.append(current_ema)
+        for i in range(period, len(prices)):
+            current_ema = (prices[i] - current_ema) * multiplier + current_ema
+            ema[i] = current_ema
             
         return ema
 
     @staticmethod
     def calc_atr(bars: List[Bar], period: int) -> List[float]:
-        if len(bars) < period:
-            return [None] * len(bars)
+        if len(bars) == 0:
+            return []
             
-        trs = [0.0]
+        trs = [0.0] * len(bars)
         for i in range(1, len(bars)):
-            tr = max(
+            trs[i] = max(
                 bars[i].high - bars[i].low,
                 abs(bars[i].high - bars[i-1].close),
                 abs(bars[i].low - bars[i-1].close)
             )
-            trs.append(tr)
             
-        atr = [None] * (period - 1)
+        atr = [None] * len(bars)
+        if len(bars) <= period:
+            return atr
+            
         current_atr = sum(trs[1:period+1]) / period
-        atr.append(current_atr)
+        atr[period] = current_atr
         
-        for tr in trs[period+1:]:
-            current_atr = (current_atr * (period - 1) + tr) / period
-            atr.append(current_atr)
+        for i in range(period+1, len(bars)):
+            current_atr = (current_atr * (period - 1) + trs[i]) / period
+            atr[i] = current_atr
 
         return atr
 
@@ -51,26 +52,27 @@ class Indicators:
         if len(closes) <= period:
             return [None] * len(closes)
         
-        gains = []
-        losses = []
+        gains = [0.0] * len(closes)
+        losses = [0.0] * len(closes)
         for i in range(1, len(closes)):
             change = closes[i] - closes[i-1]
-            gains.append(change if change > 0 else 0)
-            losses.append(abs(change) if change < 0 else 0)
+            gains[i] = change if change > 0 else 0
+            losses[i] = abs(change) if change < 0 else 0
             
-        avg_gain = sum(gains[:period]) / period
-        avg_loss = sum(losses[:period]) / period
+        rsi = [None] * len(closes)
         
-        rsis = [None] * period
-        rsis.append(100.0 if avg_loss == 0 else 100.0 - (100.0 / (1.0 + avg_gain / avg_loss)))
+        avg_gain = sum(gains[1:period+1]) / period
+        avg_loss = sum(losses[1:period+1]) / period
+        
+        rsi[period] = 100.0 if avg_loss == 0 else 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
             
-        for i in range(period, len(gains)):
+        for i in range(period+1, len(closes)):
             avg_gain = (avg_gain * (period - 1) + gains[i]) / period
             avg_loss = (avg_loss * (period - 1) + losses[i]) / period
             
-            rsis.append(100.0 if avg_loss == 0 else 100.0 - (100.0 / (1.0 + avg_gain / avg_loss)))
+            rsi[i] = 100.0 if avg_loss == 0 else 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
                 
-        return rsis
+        return rsi
 
 def is_bullish_regime(bars_4h: List[Bar], atr_threshold=0.005) -> bool:
     if len(bars_4h) < 201:

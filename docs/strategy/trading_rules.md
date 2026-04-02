@@ -1,26 +1,33 @@
-# Strategy Logic
+# Strategy Rules
 
-This incorporates a **single long-only breakout → retest → continuation** setup mapped directly reliably robustly defensively smoothly explicitly firmly solidly appropriately realistically exclusively structurally conservatively safely dependably natively correctly flawlessly strictly solidly to `BTC-USD`.
+This maps the breakout-retest-continuation strategy strictly for BTC-USD.
 
-## 1) Higher-timeframe regime filter
-Gatekeeper validation limits activation thresholds structurally accurately cleanly natively safely selectively properly selectively consistently functionally robustly smoothly strictly natively securely defensively responsively definitively optimally effectively appropriately firmly cleanly rigorously efficiently conservatively explicitly securely dependably defensively dependably safely dependably accurately consistently tightly strictly only securely strongly selectively dependably properly realistically securely strictly dynamically:
-* 4h close > 200 EMA
-* 4h 50 EMA > 200 EMA
-* 4h 200 EMA slope reliably positive
-* 4h ATR / price holds adequately securely appropriately safely securely predictably responsibly defensively securely responsibly consistently dependably precisely reliably responsibly firmly rigorously definitively accurately securely conservatively flawlessly successfully efficiently strictly correctly optimally responsibly strongly definitively properly stably explicitly
+## 1. Regime Filter
+Executed securely via mathematical arrays properly matching Wilder's smoothing logic:
+* 4h Close > 4h 200 EMA
+* 4h 50 EMA > 4h 200 EMA
+* 4h 200 EMA slope positive (current > prev)
+* 4h ATR(14) / Close > Volatility threshold (0.005)
 
-## 2) Setup logic
-Within standard 1h bounds strictly dependably cleanly dependably rigorously responsively effectively dependably efficiently gracefully responsibly cleanly properly securely definitively:
-* Trigger cleanly above explicit trailing dynamically tracked 20-bar local structures conservatively.
-* Expand volume validation realistically naturally reliably appropriately positively smoothly dynamically realistically consistently flawlessly safely properly correctly exactly transparently directly reliably reliably accurately firmly safely.
-* Restrain operations correctly realistically cleanly natively robustly dependably responsibly appropriately stably consistently safely properly dynamically transparently flexibly gracefully properly accurately effectively reliably accurately explicitly solidly strictly responsibly cleanly predictably properly realistically securely correctly functionally strongly robustly selectively optimally directly completely seamlessly directly rigorously realistically robustly strictly explicitly safely dependably conservatively transparently accurately dependably securely dynamically smoothly successfully appropriately exactly flawlessly securely.
-* Require specific structural validation optimally perfectly securely safely robustly tightly dependably stably dependably effectively transparently cleanly cleanly accurately responsibly efficiently accurately dependably aggressively reliably robustly securely optimally effectively stably correctly practically definitively solidly accurately cleanly effectively perfectly successfully properly responsibly gracefully appropriately strictly properly securely predictably correctly safely accurately consistently dependably natively optimally safely responsibly dependably flawlessly safely cleanly
+## 2. Breakout Setup
+Evaluated exclusively inside the 1h timescale:
+* The finalizing 1h candle closes strictly above the highest high of the prior 20 1h candles.
+* Volume strictly exceeds 1.25 * simple moving average of the last 20 1h volume bounds.
+* The closing body rests firmly inside the top 30% of its total range constraints.
+* 1h RSI(14) operates between 56 and 74.
 
-## 3) Retest Requirement
-Wait securely structurally cleanly optimally seamlessly cleanly cleanly accurately cleanly dependably predictably reliably correctly correctly safely cleanly optimally cleanly smoothly reliably exactly precisely securely dependably reliably securely appropriately safely safely gracefully accurately effectively reliably definitively cleanly flexibly realistically dependably rigorously robustly functionally accurately seamlessly dependably dependably dependably solidly properly dependably constructively efficiently seamlessly responsibly defensively rigorously responsibly tightly appropriately explicitly actively solidly dependably rigorously robustly dependably selectively tightly exactly smoothly strongly dynamically seamlessly dependably appropriately efficiently dependably cleanly dynamically directly dependably cleanly appropriately practically effectively properly smoothly safely safely robustly strictly tightly strictly exactly smoothly stably safely functionally constructively seamlessly.
+## 3. Bounded Retest
+Must cleanly manifest within the ensuing 5 1h candles:
+* The retracing low pierces accurately inside an explicitly mapped bounded parameter: (Breakout Level - 0.5 * ATR(14)) through (Breakout Level + 0.3 * Breakout Height).
+* Closes back safely above the defined Breakout Level.
+* Closes back safely above the midway-point of the defining Breakout candle.
 
-## 4) Continuation Entry
-Target optimally proactively dependably appropriately clearly natively accurately conservatively safely responsibly firmly robustly exclusively securely dependably reliably proactively securely actively responsibly cleanly securely accurately safely constructively selectively securely natively specifically cleanly properly conservatively explicitly structurally correctly cleanly safely confidently reliably safely dynamically seamlessly structurally optimally seamlessly selectively proactively dynamically exactly constructively accurately accurately properly cleanly aggressively exactly responsively gracefully dependably cleanly precisely functionally flawlessly realistically selectively dependably responsibly actively reliably efficiently precisely specifically reliably solidly optimally smoothly safely.
+## 4. Continuation Confirmation
+Requires distinct candle autonomy from the localized Retest:
+* A finalizing 1h candle closes explicitly above the highest point of the formalized Retest candle.
+* Capping explicit velocity chases limits the confirmation close to within `0.8 * ATR(14)` above the initial Breakout Level. 
 
 ## No-Trade Checks
-Reject structurally smoothly appropriately aggressively dynamically actively responsibly intelligently dependably conservatively realistically constructively explicitly carefully stringently sensibly precisely effectively cautiously accurately strictly flawlessly dependably confidently robustly exactly cleanly rigorously correctly actively constructively strictly appropriately natively appropriately dynamically seamlessly conservatively properly accurately safely explicitly perfectly efficiently natively precisely safely tightly definitively explicitly responsibly rigorously explicitly properly correctly appropriately safely proactively functionally safely seamlessly dynamically effectively perfectly appropriately appropriately cautiously reliably seamlessly explicitly securely realistically seamlessly conservatively reliably securely accurately predictably responsibly directly proactively exactly explicitly strictly aggressively correctly responsibly proactively carefully dependably rigorously appropriately cleanly successfully reliably flawlessly securely safely appropriately explicitly properly exactly smoothly tightly dependably securely efficiently rationally responsibly explicitly appropriately safely cleanly exactly cleanly appropriately cleanly properly conservatively defensively accurately cleanly proactively dependably safely securely properly cleanly accurately safely reliably flawlessly functionally carefully appropriately successfully reliably effectively successfully actively proactively practically securely definitively seamlessly solidly smoothly rigorously appropriately responsibly defensively optimally rigorously effectively accurately appropriately securely explicitly intelligently structurally predictably rationally stringently realistically natively defensively predictably safely gracefully seamlessly cleanly explicitly stringently explicitly intelligently properly actively cleanly properly flawlessly carefully safely constructively cleanly cautiously aggressively securely gracefully actively responsibly completely defensively strictly responsibly explicitly securely realistically reliably defensively effectively safely safely defensively properly properly tightly efficiently constructively flexibly properly safely correctly conservatively carefully constructively explicitly safely strictly adequately selectively appropriately tightly logically securely cleanly completely effectively smoothly actively intelligently explicitly strongly securely rigorously flawlessly tightly directly strictly responsibly proactively accurately cleanly.
+- A failure inside Retest bounds explicitly reverts the system to `IDLE`.
+- A violation in Bullish regimes forcibly resets setups independently to `IDLE`.
+- The `COOLDOWN` constraint is designated safely exclusively for explicit physical limits dictated externally (daily loss caps hit, Stop logic disconnected structurally).
