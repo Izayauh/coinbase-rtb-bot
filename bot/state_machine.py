@@ -64,24 +64,25 @@ class StateMachine:
         latest_1h = bars_1h[-1]
         latest_4h = bars_4h[-1]
         
-        if latest_1h.ts_open == self.last_1h_ts and latest_4h.ts_open == self.last_4h_ts:
-            return
-        
         if self.last_1h_ts:
             gap_1h = latest_1h.ts_open - self.last_1h_ts
             if gap_1h <= 0:
-                logger.warning(f"1h sequence fault. Delta: {gap_1h}.")
+                # Strictly ignores repeated processing of same bar or out-of-order older bars safely
                 return 
             elif gap_1h > 3600:
+                logger.warning(f"1h structure failure due to gap. Disabled.")
                 self.state = self.DISABLED
                 self._persist()
                 return
                 
         if self.last_4h_ts:
+            # 4h is regime constraint. Valid values are gap >= 0.
             gap_4h = latest_4h.ts_open - self.last_4h_ts
-            if gap_4h <= 0:
+            if gap_4h < 0:
+                logger.warning("Out of order 4h context, skipping safely.")
                 return
             elif gap_4h > 14400:
+                logger.warning("4h structure failure due to gap. Disabled.")
                 self.state = self.DISABLED
                 self._persist()
                 return
@@ -89,16 +90,20 @@ class StateMachine:
         self.last_1h_ts = latest_1h.ts_open
         self.last_4h_ts = latest_4h.ts_open
         
+        if self.state == self.SIGNAL_EMITTED:
+            # Pure signal-state machine: Signal was emitted on prior distinct bar. 
+            # We natively reset here and immediately evaluate the current new bar for a fresh breakout.
+            self._reset_to_idle()
+
+        # Normal branch evaluation
         if self.state == self.IDLE:
             self._eval_breakout(bars_1h, bars_4h)
         elif self.state == self.WAITING_RETEST:
             self._eval_retest(bars_1h, bars_4h)
         elif self.state == self.RETEST_CONFIRMED:
             self._eval_continuation(bars_1h, bars_4h)
-        elif self.state == self.SIGNAL_EMITTED:
-            self._eval_emitted()
         elif self.state == self.COOLDOWN:
-            pass
+            pass # Reserved for explicit external execution failures resetting it
             
         self._persist()
 
@@ -144,7 +149,8 @@ class StateMachine:
         bo_midpoint = (self.breakout_bar.high + self.breakout_bar.low) / 2
         atr = Indicators.calc_atr(bars_1h, 14)[-1]
         
-        upper_zone = self.breakout_level + (self.breakout_bar.high - self.breakout_level) * 0.3
+        # Upper bounds explicitly locked to volatile ATR distance avoiding wide loose candle limits
+        upper_zone = self.breakout_level + atr * 0.2
         lower_zone = self.breakout_level - atr * 0.5
         
         touches_zone = lower_zone <= latest.low <= upper_zone
@@ -161,12 +167,14 @@ class StateMachine:
             return
 
         latest = bars_1h[-1]
+        # distinct bars explicitly mapping cleanly:
         if latest.ts_open == self.retest_bar.ts_open:
             return 
         
         if latest.close > self.retest_bar.high:
             atr = Indicators.calc_atr(bars_1h, 14)[-1]
             
+            # Prevent continuation chasing wildly
             if (latest.close - self.breakout_level) > (0.8 * atr):
                 self._reset_to_idle() 
                 return
@@ -184,11 +192,6 @@ class StateMachine:
                 f"ATR:{atr}_LEVEL:{self.breakout_level}", self.breakout_level, 
                 self.retest_bar.low, atr, cur_rsi, "NEW"
             ))
-
-    def _eval_emitted(self):
-        rows = db.fetch_all("SELECT * FROM positions WHERE state IN ('OPEN', 'PENDING')")
-        if not rows:
-            self._reset_to_idle()
 
     def _reset_to_idle(self):
         self.state = self.IDLE
