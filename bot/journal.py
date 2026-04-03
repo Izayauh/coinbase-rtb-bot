@@ -18,9 +18,8 @@ class Journal:
                 high=excluded.high,
                 low=excluded.low,
                 close=excluded.close,
-                volume=bars.volume + excluded.volume
+                volume=excluded.volume
         """
-        # Exact overwrite correctly aligns final volume boundaries against replay overlapping inputs dynamically avoiding double-counting functionally.
         db.execute(query, (
             bar.symbol, bar.timeframe, bar.ts_open,
             bar.open, bar.high, bar.low, bar.close, bar.volume
