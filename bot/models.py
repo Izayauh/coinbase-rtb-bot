@@ -22,6 +22,7 @@ class Signal:
     atr: float
     rsi: float
     status: str
+    execution_price: float
 
 @dataclass
 class Order:
@@ -31,6 +32,7 @@ class Order:
     side: str
     price: float
     size: float
+    executed_size: float
     status: str
     created_at: int
 

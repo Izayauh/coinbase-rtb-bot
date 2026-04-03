@@ -23,13 +23,12 @@ class ExecutionService:
             return Order(**existing_order_data)
 
         # 2. One-position model
-        open_position = Journal.get_open_position(signal.symbol)
-        if open_position:
-            logger.info(f"Position already active for {signal.symbol}. Rejecting signal {signal.signal_id}.")
+        if Journal.has_active_exposure(signal.symbol):
+            logger.info(f"Active exposure already exists for {signal.symbol}. Rejecting signal {signal.signal_id}.")
             return self._record_rejected_order(signal, "REJECTED_POSITION_OPEN")
 
         # 3. Entry constraints and Risk bounds
-        entry_price = signal.breakout_level
+        entry_price = signal.execution_price
         # The true initial stop should be structurally distinct from entry. We use signal.retest_level and ATR.
         stop_loss = signal.retest_level - signal.atr
 
@@ -53,6 +52,7 @@ class ExecutionService:
             side="BUY",
             price=limit_price,
             size=size,
+            executed_size=0.0,
             status="PENDING",
             created_at=int(time.time())
         )
@@ -66,15 +66,16 @@ class ExecutionService:
             signal_id=signal.signal_id,
             symbol=signal.symbol,
             side="BUY",
-            price=signal.breakout_level,
+            price=signal.execution_price,
             size=0.0,
+            executed_size=0.0,
             status=status,
             created_at=int(time.time())
         )
         Journal.insert_order(order.__dict__)
         return order
 
-    def handle_fill(self, order: Order, signal: Signal, fill_price: float, fill_size: float, fee: float = 0.0):
+    def handle_fill(self, order: Order, signal: Signal, fill_price: float, fill_size: float, fee: float = 0.0, execution_id: Optional[str] = None):
         """
         Handles an execution fill and transitions order & positions safely.
         """
@@ -82,20 +83,33 @@ class ExecutionService:
             logger.error(f"Cannot process fill for order {order.order_id} in state {order.status}")
             return
             
+        new_executed_size = order.executed_size + fill_size
+        if new_executed_size > order.size * 1.0001:  # Allow minimal floating point slop but enforce bounds
+            logger.error(f"Fill size {fill_size} exceeds remaining order size. Rejecting invalid fill.")
+            return
+
+        exec_id_val = execution_id if execution_id else f"exec_{uuid.uuid4().hex[:8]}"
         execution = Execution(
-            execution_id=f"exec_{uuid.uuid4().hex[:8]}",
+            execution_id=exec_id_val,
             order_id=order.order_id,
             price=fill_price,
             size=fill_size,
             fee=fee,
             ts=int(time.time())
         )
-        Journal.insert_execution(execution.__dict__)
         
-        # update order status
-        new_status = "FILLED" if fill_size >= order.size else "PARTIAL" # Simplified for v0
+        # Idempotency check on execution could be added strictly later, Journal.insert_execution can handle uniqueness
+        try:
+            Journal.insert_execution(execution.__dict__)
+        except Exception as e:
+            logger.error(f"Failed to insert execution {exec_id_val}, possibly duplicate: {e}")
+            return
+        
+        # Update order status
+        new_status = "FILLED" if new_executed_size >= order.size * 0.9999 else "PARTIAL"
         order.status = new_status
-        Journal.update_order_status(order.order_id, new_status)
+        order.executed_size = new_executed_size
+        Journal.update_order_execution(order.order_id, new_executed_size, new_status)
         
         # compute and persist initial stop level using the signal context
         # do not rely on strategy state alone

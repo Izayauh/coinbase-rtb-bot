@@ -44,7 +44,8 @@ class Database:
             retest_level REAL,
             atr REAL,
             rsi REAL,
-            status TEXT
+            status TEXT,
+            execution_price REAL
         );
 
         CREATE TABLE IF NOT EXISTS orders (
@@ -54,6 +55,7 @@ class Database:
             side TEXT,
             price REAL,
             size REAL,
+            executed_size REAL,
             status TEXT,
             created_at INTEGER,
             FOREIGN KEY(signal_id) REFERENCES signals(signal_id)

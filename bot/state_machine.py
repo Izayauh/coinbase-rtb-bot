@@ -182,15 +182,15 @@ class StateMachine:
             self.state = self.SIGNAL_EMITTED
             
             query = """
-                INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status, execution_price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(signal_id) DO UPDATE SET status=excluded.status
             """
             cur_rsi = Indicators.calc_rsi([b.close for b in bars_1h])[-1]
             db.execute(query, (
                 self.setup_id, latest.symbol, "LONG", 
                 f"ATR:{atr}_LEVEL:{self.breakout_level}", self.breakout_level, 
-                self.retest_bar.low, atr, cur_rsi, "NEW"
+                self.retest_bar.low, atr, cur_rsi, "NEW", latest.close
             ))
 
     def _reset_to_idle(self):

@@ -58,16 +58,24 @@ class Journal:
         return dict(rows[0]) if rows else {}
 
     @staticmethod
+    def has_active_exposure(symbol: str) -> bool:
+        pos_query = "SELECT COUNT(*) as c FROM positions WHERE symbol=? AND state IN ('OPEN', 'PENDING')"
+        pos_count = db.fetch_all(pos_query, (symbol,))[0]['c']
+        ord_query = "SELECT COUNT(*) as c FROM orders WHERE symbol=? AND status IN ('PENDING', 'PARTIAL')"
+        ord_count = db.fetch_all(ord_query, (symbol,))[0]['c']
+        return pos_count > 0 or ord_count > 0
+
+    @staticmethod
     def insert_order(order_data: dict):
         query = """
-            INSERT INTO orders (order_id, signal_id, symbol, side, price, size, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(order_id) DO UPDATE SET status=excluded.status
+            INSERT INTO orders (order_id, signal_id, symbol, side, price, size, executed_size, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(order_id) DO UPDATE SET status=excluded.status, executed_size=excluded.executed_size
         """
         db.execute(query, (
             order_data['order_id'], order_data['signal_id'], order_data['symbol'],
             order_data['side'], order_data['price'], order_data['size'],
-            order_data['status'], order_data['created_at']
+            order_data.get('executed_size', 0.0), order_data['status'], order_data['created_at']
         ))
 
     @staticmethod
@@ -80,6 +88,11 @@ class Journal:
     def update_order_status(order_id: str, status: str):
         query = "UPDATE orders SET status=? WHERE order_id=?"
         db.execute(query, (status, order_id))
+
+    @staticmethod
+    def update_order_execution(order_id: str, new_executed_size: float, new_status: str):
+        query = "UPDATE orders SET executed_size=?, status=? WHERE order_id=?"
+        db.execute(query, (new_executed_size, new_status, order_id))
 
     @staticmethod
     def insert_execution(execution_data: dict):
