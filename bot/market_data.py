@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime
 from .coinbase_adapter import CoinbaseAdapter
 from .bars import BarBuilder
@@ -11,6 +12,7 @@ class MarketDataProcessor:
         self.adapter = adapter
         self.bar_builders = {}
         self.on_bar_close = on_bar_close_callback
+        self.last_trade_ts: float = 0.0  # updated on every received trade
 
     def get_builder(self, product_id: str) -> BarBuilder:
         if product_id not in self.bar_builders:
@@ -36,6 +38,7 @@ class MarketDataProcessor:
                             # Parse into epoch safely
                             ts_sec = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
                             
+                            self.last_trade_ts = time.time()
                             builder = self.get_builder(product_id)
                             closed_bars = builder.process_trade(price, size, ts_sec)
                             
