@@ -2,9 +2,9 @@ import time
 import logging
 import uuid
 from typing import Optional
-from models import Signal, Order, Position, Execution
-from journal import Journal
-from risk import RiskManager
+from .models import Signal, Order, Position, Execution
+from .journal import Journal
+from .risk import RiskManager
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,7 @@ class ExecutionService:
         Checks local PENDING orders. Uses adapter for explicit exchange mapping.
         If stale, marks EXPIRED.
         """
-        from db import db
+        from .db import db
         pending_orders = Journal.get_pending_orders()
         now = int(time.time())
         for o_data in pending_orders:

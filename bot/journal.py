@@ -2,8 +2,8 @@ import logging
 import json
 import time
 from typing import List
-from db import db
-from models import Bar, Signal, Order
+from .db import db
+from .models import Bar, Signal, Order
 
 logger = logging.getLogger(__name__)
 

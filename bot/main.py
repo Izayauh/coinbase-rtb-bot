@@ -1,8 +1,8 @@
 import asyncio
 import logging
-from coinbase_adapter import CoinbaseAdapter
-from market_data import MarketDataProcessor
-from models import Bar
+from .coinbase_adapter import CoinbaseAdapter
+from .market_data import MarketDataProcessor
+from .models import Bar
 
 logging.basicConfig(
     level=logging.INFO,

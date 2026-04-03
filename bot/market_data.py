@@ -1,8 +1,8 @@
 import asyncio
 import logging
 from datetime import datetime
-from coinbase_adapter import CoinbaseAdapter
-from bars import BarBuilder
+from .coinbase_adapter import CoinbaseAdapter
+from .bars import BarBuilder
 
 logger = logging.getLogger(__name__)
 

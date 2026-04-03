@@ -1,6 +1,6 @@
 import logging
 from typing import Dict, List
-from models import Bar
+from .models import Bar
 
 logger = logging.getLogger(__name__)
 

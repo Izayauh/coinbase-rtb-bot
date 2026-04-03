@@ -1,12 +1,9 @@
 import pytest
 import os
-import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from models import Bar
-from state_machine import StateMachine
-import strategy
+from bot.models import Bar
+from bot.state_machine import StateMachine
+import bot.strategy as strategy
 
 @pytest.fixture
 def temp_db():
@@ -17,13 +14,13 @@ def temp_db():
             os.remove(test_path)
         except OSError:
             pass
-            
-    import db as global_db
+
+    import bot.db as global_db
     global_db.db.db_path = test_path
     global_db.db._init_db()
-    
+
     yield global_db.db
-    
+
     if os.path.exists(test_path):
         try:
             os.remove(test_path)
@@ -32,7 +29,7 @@ def temp_db():
 
 @pytest.fixture
 def mock_indicators(monkeypatch):
-    import state_machine
+    import bot.state_machine as state_machine
     monkeypatch.setattr(state_machine, 'is_bullish_regime', lambda b: True)
     monkeypatch.setattr(state_machine.Indicators, 'calc_rsi', lambda c, p=14: [65.0]*len(c))
     monkeypatch.setattr(state_machine.Indicators, 'calc_atr', lambda b, p=14: [100.0]*len(b))
@@ -51,14 +48,14 @@ def generate_bars(count, timeframe="1h", start_ts=0, close_val=1000.0, high_val=
 def test_unchanged_4h_context_advances_1h(temp_db, mock_indicators):
     sm = StateMachine()
     bars_4h = generate_bars(205, "4h")
-    bars_1h = generate_bars(25, "1h", close_val=100.0, high_val=110.0) 
-    
+    bars_1h = generate_bars(25, "1h", close_val=100.0, high_val=110.0)
+
     sm.process_bars(bars_1h, bars_4h)
     assert sm.state == StateMachine.IDLE
-    
+
     breakout_bar = Bar("BTC-USD", "1h", bars_1h[-1].ts_open + 3600, 100.0, 150.0, 90.0, 140.0, 500.0)
     new_1h = bars_1h + [breakout_bar]
-    
+
     sm.process_bars(new_1h, bars_4h)
     assert sm.state == StateMachine.WAITING_RETEST
 
@@ -66,16 +63,16 @@ def test_repeated_processing_is_idempotent(temp_db, mock_indicators):
     sm = StateMachine()
     bars_4h = generate_bars(205, "4h")
     bars_1h = generate_bars(25, "1h", close_val=100.0, high_val=110.0)
-    
+
     sm.process_bars(bars_1h, bars_4h)
     assert sm.state == StateMachine.IDLE
-    
+
     breakout_bar = Bar("BTC-USD", "1h", bars_1h[-1].ts_open + 3600, 100.0, 150.0, 90.0, 140.0, 500.0)
     new_1h = bars_1h + [breakout_bar]
-    
+
     sm.process_bars(new_1h, bars_4h)
     assert sm.state == StateMachine.WAITING_RETEST
-    
+
     sm.process_bars(new_1h, bars_4h)
     assert sm.state == StateMachine.WAITING_RETEST
     sm.process_bars(new_1h, bars_4h)
@@ -86,7 +83,7 @@ def test_out_of_order_bars_ignored(temp_db, mock_indicators):
     bars_4h = generate_bars(205, "4h")
     bars_1h = generate_bars(25, "1h")
     sm.process_bars(bars_1h, bars_4h)
-    
+
     old_bar = Bar("BTC-USD", "1h", bars_1h[-1].ts_open - 3600, 100, 100, 100, 100, 5)
     sm.process_bars(bars_1h[:-1] + [old_bar], bars_4h)
     assert sm.state == StateMachine.IDLE
@@ -97,7 +94,7 @@ def test_four_hour_gap_disables(temp_db, mock_indicators):
     bars_4h = generate_bars(205, "4h")
     bars_1h = generate_bars(25, "1h")
     sm.process_bars(bars_1h, bars_4h)
-    
+
     gapped_4h = Bar("BTC-USD", "4h", bars_4h[-1].ts_open + 14400*2, 1, 1, 1, 1, 1)
     sm.process_bars(bars_1h + [Bar("BTC-USD", "1h", bars_1h[-1].ts_open+3600,1,1,1,1,1)], bars_4h + [gapped_4h])
     assert sm.state == StateMachine.DISABLED
@@ -105,43 +102,43 @@ def test_four_hour_gap_disables(temp_db, mock_indicators):
 def test_full_lifecycle_single_signal(temp_db, mock_indicators):
     sm = StateMachine()
     bars_4h = generate_bars(205, "4h")
-    bars_1h = generate_bars(25, "1h", close_val=100.0, high_val=110.0) 
-    
+    bars_1h = generate_bars(25, "1h", close_val=100.0, high_val=110.0)
+
     sm.process_bars(bars_1h, bars_4h)
-    
+
     # 1. Breakout
     ts = bars_1h[-1].ts_open
     b1 = Bar("BTC-USD", "1h", ts + 3600, 100.0, 150.0, 90.0, 140.0, 500.0)
     bars_1h.append(b1)
     sm.process_bars(bars_1h, bars_4h)
-    
+
     setup_id = sm.setup_id
     assert setup_id is not None
-    
+
     # 2. Retest (Requires close > 110, low between ~60 and 130). We pass low 80, close 125 (> 120 midpoint).
     b2 = Bar("BTC-USD", "1h", ts + 7200, 140.0, 140.0, 80.0, 125.0, 50.0)
     bars_1h.append(b2)
     sm.process_bars(bars_1h, bars_4h)
     assert sm.state == StateMachine.RETEST_CONFIRMED
-    
+
     # 3. Continuation -> Signal
     b3 = Bar("BTC-USD", "1h", ts + 10800, 115.0, 160.0, 115.0, 150.0, 50.0)
     bars_1h.append(b3)
     sm.process_bars(bars_1h, bars_4h)
     assert sm.state == StateMachine.SIGNAL_EMITTED
-    
+
     # Check DB that exactly one signal is emitted and matches setup
     rows = temp_db.fetch_all("SELECT * FROM signals")
     assert len(rows) == 1
     assert rows[0]["signal_id"] == setup_id
     assert rows[0]["symbol"] == "BTC-USD"
-    
+
     # 4. Same continuation bar re-passed
     sm.process_bars(bars_1h, bars_4h)
     assert sm.state == StateMachine.SIGNAL_EMITTED
     rows_after = temp_db.fetch_all("SELECT * FROM signals")
     assert len(rows_after) == 1
-    
+
     # 5. New bar natively resets and looks for breakouts
     b4 = Bar("BTC-USD", "1h", ts + 14400, 150.0, 155.0, 140.0, 145.0, 50.0)
     bars_1h.append(b4)
@@ -149,51 +146,51 @@ def test_full_lifecycle_single_signal(temp_db, mock_indicators):
     assert sm.state == StateMachine.IDLE
 
 def test_bearish_regime_invalidates_retest(temp_db, mock_indicators, monkeypatch):
-    import state_machine
+    import bot.state_machine as state_machine
     sm = StateMachine()
     bars_4h = generate_bars(205, "4h")
     bars_1h = generate_bars(25, "1h", close_val=100.0, high_val=110.0)
-    
+
     sm.process_bars(bars_1h, bars_4h)
-    
+
     # Breakout
     ts = bars_1h[-1].ts_open
     b1 = Bar("BTC-USD", "1h", ts + 3600, 100.0, 150.0, 90.0, 140.0, 500.0)
     bars_1h.append(b1)
     sm.process_bars(bars_1h, bars_4h)
     assert sm.state == StateMachine.WAITING_RETEST
-    
+
     # Force regime to flip bearish
     monkeypatch.setattr(state_machine, 'is_bullish_regime', lambda b: False)
-    
+
     b2 = Bar("BTC-USD", "1h", ts + 7200, 140.0, 140.0, 80.0, 125.0, 50.0)
     bars_1h.append(b2)
     sm.process_bars(bars_1h, bars_4h)
-    
+
     # If a retest forms in a bearish regime, we return to IDLE immediately
     assert sm.state == StateMachine.IDLE
 
 def test_restart_persistence(temp_db, mock_indicators):
     sm = StateMachine()
     bars_4h = generate_bars(205, "4h")
-    bars_1h = generate_bars(25, "1h", close_val=100.0, high_val=110.0) 
-    
+    bars_1h = generate_bars(25, "1h", close_val=100.0, high_val=110.0)
+
     # Breakout
     b1 = Bar("BTC-USD", "1h", bars_1h[-1].ts_open + 3600, 100.0, 150.0, 90.0, 140.0, 500.0)
     bars_1h.append(b1)
     sm.process_bars(bars_1h, bars_4h)
-    
+
     assert sm.state == StateMachine.WAITING_RETEST
     setup_id = sm.setup_id
-    
+
     # Simulate restart by instantiating new state machine
     sm2 = StateMachine()
     assert sm2.state == StateMachine.WAITING_RETEST
     assert sm2.setup_id == setup_id
-    
+
     # Send a valid retest to the fresh instance
     b2 = Bar("BTC-USD", "1h", bars_1h[-1].ts_open + 3600, 140.0, 140.0, 80.0, 125.0, 50.0)
     bars_1h.append(b2)
     sm2.process_bars(bars_1h, bars_4h)
-    
+
     assert sm2.state == StateMachine.RETEST_CONFIRMED
