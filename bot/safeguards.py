@@ -67,10 +67,16 @@ class Safeguards:
     # ------------------------------------------------------------------
 
     def can_trade(self) -> bool:
-        """Return True only if all guards pass."""
+        """Return True only if all guards pass.
+
+        _check_stale_stream() is always called (even when trading is already
+        disabled) so its recovery path can re-enable trading when the stream
+        comes back.
+        """
+        stale = self._check_stale_stream()
         if not self._trading_enabled:
             return False
-        if self._check_stale_stream():
+        if stale:
             return False
         if self._check_daily_loss():
             return False

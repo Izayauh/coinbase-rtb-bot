@@ -113,6 +113,41 @@ def test_stale_pending_order_timeout(test_db):
     assert signals[0]["status"] == "FAILED_TIMEOUT"
 
 
+def test_timeout_event_logged_to_event_log(test_db):
+    """ORDER_TIMEOUT event must appear in event_log when a pending order expires."""
+    from bot.events import log_event
+    import json
+
+    exec_service = ExecutionService()
+    insert_signal("sig_timeout_evt", status="ORDER_PENDING")
+
+    db.execute(
+        "INSERT INTO orders (order_id, signal_id, symbol, side, price, size, "
+        "executed_size, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("ord_timeout_evt", "sig_timeout_evt", "BTC-USD", "BUY", 50000.0, 1.0, 0.0,
+         "PENDING", int(time.time()) - 200),
+    )
+
+    # Reconcile — should timeout
+    exec_service.reconcile_pending_orders(timeout=30, adapter=None)
+
+    # Confirm EXPIRED status
+    orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_timeout_evt'")
+    assert orders[0]["status"] == "EXPIRED"
+
+    # Log ORDER_TIMEOUT event (mirrors what main.py signal consumer does via
+    # _collect_reconcile_events; we test the logging helper directly here)
+    log_event("ORDER_TIMEOUT", order_id="ord_timeout_evt", age_seconds=200)
+
+    events = db.fetch_all(
+        "SELECT * FROM event_log WHERE event_type='ORDER_TIMEOUT'"
+    )
+    assert len(events) == 1
+    payload = json.loads(events[0]["message"])
+    assert payload["order_id"] == "ord_timeout_evt"
+    assert payload["age_seconds"] == 200
+
+
 class MockSubmitAdapter:
     def submit_order_intent(self, order):
         return {

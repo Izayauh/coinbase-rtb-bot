@@ -1,4 +1,31 @@
+import sys
+import types
 import pytest
+
+# ---------------------------------------------------------------------------
+# Stub the coinbase SDK so tests can import bot.adapters (PaperAdapter)
+# without needing the real coinbase-advanced-py package installed.
+# ---------------------------------------------------------------------------
+def _make_coinbase_stub():
+    coinbase_pkg = types.ModuleType("coinbase")
+    rest_mod = types.ModuleType("coinbase.rest")
+    jwt_mod = types.ModuleType("coinbase.jwt_generator")
+
+    class _RESTClient:
+        def __init__(self, *a, **kw):
+            pass
+
+    rest_mod.RESTClient = _RESTClient
+    jwt_mod.build_ws_jwt = lambda *a, **kw: "stub_jwt"
+
+    coinbase_pkg.rest = rest_mod
+    coinbase_pkg.jwt_generator = jwt_mod
+    sys.modules.setdefault("coinbase", coinbase_pkg)
+    sys.modules.setdefault("coinbase.rest", rest_mod)
+    sys.modules.setdefault("coinbase.jwt_generator", jwt_mod)
+
+
+_make_coinbase_stub()
 
 
 @pytest.fixture
