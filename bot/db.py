@@ -85,10 +85,32 @@ class Database:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.executescript(schema)
+                self._run_migrations(conn)
                 logger.info(f"Database initialized cleanly at {self.db_path}")
         except Exception as e:
             logger.error(f"Failed to initialize SQLite database: {e}")
             raise
+
+    def _run_migrations(self, conn: sqlite3.Connection):
+        """Lightweight SQLite migration routine to add missing columns"""
+        expected_columns = {
+            "signals": {"execution_price": "REAL"},
+            "orders": {"executed_size": "REAL"}
+        }
+        
+        cursor = conn.cursor()
+        for table, columns in expected_columns.items():
+            cursor.execute(f"PRAGMA table_info({table})")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+            
+            for col_name, col_type in columns.items():
+                if col_name not in existing_columns:
+                    logger.info(f"Migration: Adding column {col_name} to {table}")
+                    try:
+                        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                    except Exception as e:
+                        logger.error(f"Migration failed adding {col_name} to {table}: {e}")
+                        raise
 
     def execute(self, query: str, params: tuple = ()):
         with sqlite3.connect(self.db_path) as conn:
