@@ -147,3 +147,124 @@ def test_restart_resumes_state_cleanly(test_db):
     process_consumer_tick(exec_service)
     orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord4'")
     assert orders[0]["status"] == "PENDING"
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 additions
+# ---------------------------------------------------------------------------
+
+def insert_order_with_exchange_id(order_id, signal_id, exchange_order_id, size=1.0):
+    """Insert a PENDING order that has already been submitted to the exchange."""
+    db.execute(
+        "INSERT INTO orders (order_id, signal_id, symbol, side, price, size, "
+        "executed_size, status, created_at, exchange_order_id, submitted_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (order_id, signal_id, "BTC-USD", "BUY", 49500.0, size,
+         0.0, "PENDING", int(time.time()), exchange_order_id, int(time.time())),
+    )
+
+
+class MockFailedExchangeAdapter:
+    """Adapter that reports no fills and a CANCELLED remote order status."""
+
+    def sync_get_fills(self, order_id):
+        return []
+
+    def sync_get_order(self, exchange_order_id):
+        return {"status": "CANCELLED"}
+
+
+def test_failed_exchange_path(test_db):
+    """reconcile_pending_orders correctly handles exchange-side order cancellation."""
+    exec_service = ExecutionService()
+    insert_signal("sig_fail", status="ORDER_PENDING")
+    insert_order_with_exchange_id("ord_fail", "sig_fail", "cb_ord_fail")
+
+    exec_service.reconcile_pending_orders(timeout=300, adapter=MockFailedExchangeAdapter())
+
+    # Order must be marked FAILED
+    orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_fail'")
+    assert orders[0]["status"] == "FAILED"
+
+    # Signal must be marked FAILED_EXCHANGE
+    signals = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig_fail'")
+    assert signals[0]["status"] == "FAILED_EXCHANGE"
+
+    # No position must have been opened
+    pos = Journal.get_open_position("BTC-USD")
+    assert pos == {}
+
+
+class MockFillAdapter:
+    """Adapter that returns a single fill for the order."""
+
+    def __init__(self, trade_id="trade_001", fill_price=49500.0, fill_size=1.0, commission=0.5):
+        self._trade_id = trade_id
+        self._fill_price = fill_price
+        self._fill_size = fill_size
+        self._commission = commission
+
+    def sync_get_fills(self, order_id):
+        return [
+            {
+                "trade_id": self._trade_id,
+                "price": self._fill_price,
+                "size": self._fill_size,
+                "commission": self._commission,
+            }
+        ]
+
+    def sync_get_order(self, exchange_order_id):
+        return {"status": "FILLED"}
+
+
+def test_adapter_driven_fill_reconciliation(test_db):
+    """reconcile_pending_orders pulls fills via adapter and fully transitions the order."""
+    exec_service = ExecutionService()
+    insert_signal("sig_fill", status="ORDER_PENDING")
+    insert_order_with_exchange_id("ord_fill", "sig_fill", "cb_ord_fill", size=1.0)
+
+    adapter = MockFillAdapter(trade_id="trade_abc", fill_price=49500.0, fill_size=1.0)
+    exec_service.reconcile_pending_orders(timeout=300, adapter=adapter)
+
+    # Order must be FILLED
+    orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_fill'")
+    assert orders[0]["status"] == "FILLED"
+    assert orders[0]["executed_size"] == 1.0
+
+    # Signal must be ORDER_FILLED
+    signals = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig_fill'")
+    assert signals[0]["status"] == "ORDER_FILLED"
+
+    # Position must be created with correct entry and stop
+    pos = Journal.get_open_position("BTC-USD")
+    assert pos["state"] == "OPEN"
+    assert pos["avg_entry"] == 49500.0
+    assert pos["stop_active"] == 1
+    # stop = retest_level - atr = 49000.0 - 1000.0 = 48000.0
+    assert pos["stop_price"] == 48000.0
+
+
+def test_duplicate_fill_not_double_credited(test_db):
+    """Adapter returning the same trade_id twice does not double-credit executed_size."""
+    exec_service = ExecutionService()
+    insert_signal("sig_dup", status="ORDER_PENDING")
+    insert_order_with_exchange_id("ord_dup", "sig_dup", "cb_ord_dup", size=1.0)
+
+    adapter = MockFillAdapter(trade_id="trade_same", fill_price=49500.0, fill_size=1.0)
+
+    # First reconcile tick — fill applied
+    exec_service.reconcile_pending_orders(timeout=300, adapter=adapter)
+
+    orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_dup'")
+    assert orders[0]["status"] == "FILLED"
+    assert orders[0]["executed_size"] == 1.0
+
+    # Second reconcile tick — same fill returned again, must not double-credit
+    exec_service.reconcile_pending_orders(timeout=300, adapter=adapter)
+
+    orders_after = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_dup'")
+    assert orders_after[0]["executed_size"] == 1.0
+
+    executions = db.fetch_all("SELECT * FROM executions WHERE order_id='ord_dup'")
+    assert len(executions) == 1
