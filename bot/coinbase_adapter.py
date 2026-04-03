@@ -66,6 +66,18 @@ class CoinbaseAdapter:
         if product_id: kwargs["product_id"] = product_id
         return await asyncio.to_thread(self.rest.list_fills, **kwargs)
 
+    def submit_order_intent(self, order) -> dict:
+        """
+        Thin local abstraction boundary mapping an internal Order intent 
+        into an explicitly formatted exchange response without directly firing
+        live payloads yet (paper mode focus).
+        """
+        return {
+            "exchange_order_id": f"cb_{order.order_id}",
+            "submitted_at": int(time.time()),
+            "status": "OPEN"
+        }
+
     # --- Thin Advanced WebSocket Loop ---
 
     async def _ws_payload(self, channel: str, product_ids: List[str]):

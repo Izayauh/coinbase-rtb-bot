@@ -111,6 +111,9 @@ class ExecutionService:
         order.executed_size = new_executed_size
         Journal.update_order_execution(order.order_id, new_executed_size, new_status)
         
+        if new_status == "FILLED":
+            Journal.update_signal_status(signal.signal_id, "ORDER_FILLED")
+        
         # compute and persist initial stop level using the signal context
         # do not rely on strategy state alone
         stop_loss = signal.retest_level - signal.atr
@@ -152,19 +155,36 @@ class ExecutionService:
         order.status = "FAILED"
         Journal.update_order_status(order.order_id, "FAILED")
 
-    def reconcile_pending_orders(self, timeout: int = 60):
+    def reconcile_pending_orders(self, timeout: int = 60, adapter=None):
         """
         Exchange-agnostic local reconciliation:
-        Checks local PENDING orders. If stale, marks EXPIRED.
-        In a real connection, this would query exchange explicitly or apply fills.
+        Checks local PENDING orders. Uses adapter for explicit exchange mapping.
+        If stale, marks EXPIRED.
         """
         pending_orders = Journal.get_pending_orders()
         now = int(time.time())
         for o_data in pending_orders:
             order = Order(**o_data)
+            
+            # 1. Thin exchange adapter boundary
+            if adapter and not order.exchange_order_id:
+                ext_data = adapter.submit_order_intent(order)
+                order.exchange_order_id = ext_data["exchange_order_id"]
+                order.submitted_at = ext_data["submitted_at"]
+                order.updated_at = ext_data["submitted_at"]
+                Journal.insert_order(order.__dict__)
+                continue # Let it rest until next tick
+
+            # 2. Exchange-status reconcile placeholder
+            if adapter and order.exchange_order_id:
+                # e.g., current_status = adapter.get_order_status(order.exchange_order_id)
+                pass
+                
+            # 3. Timeout checking
             if now - order.created_at >= timeout:
                 logger.warning(f"Order {order.order_id} stale pending. Marking EXPIRED.")
                 order.status = "EXPIRED"
                 order.fail_reason = "TIMEOUT"
                 order.updated_at = now
                 Journal.insert_order(order.__dict__)
+                Journal.update_signal_status(order.signal_id, "FAILED_TIMEOUT")

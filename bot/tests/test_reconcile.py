@@ -23,7 +23,7 @@ def clean_tables():
     db.execute("DELETE FROM executions")
     db.execute("DELETE FROM positions")
 
-def process_consumer_tick(exec_service):
+def process_consumer_tick(exec_service, adapter=None):
     """Simulates a single iteration of the signal consumer and reconciliation loop."""
     new_signals = Journal.get_new_signals()
     for s_data in new_signals:
@@ -40,7 +40,7 @@ def process_consumer_tick(exec_service):
             new_status = status_mappings.get(order.status, "PROCESSED")
             Journal.update_signal_status(signal.signal_id, new_status)
     
-    exec_service.reconcile_pending_orders(timeout=30)
+    exec_service.reconcile_pending_orders(timeout=30, adapter=adapter)
 
 def test_new_signal_transitions_to_order_pending():
     exec_service = ExecutionService(portfolio_value=10000.0)
@@ -112,9 +112,19 @@ def test_fill_application_updates_order_and_position():
     assert pos['stop_active'] == 1
     expected_stop = signal.retest_level - signal.atr
     assert pos['stop_price'] == expected_stop
+    
+    # Assert signal status updated to ORDER_FILLED
+    signal_updated = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig3'")[0]
+    assert signal_updated['status'] == "ORDER_FILLED"
 
 def test_stale_pending_order_timeout():
     exec_service = ExecutionService()
+    
+    # Needs a signal to map FAILED_TIMEOUT back
+    db.execute(
+        "INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status, execution_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("sig_stale", "BTC-USD", "BREAKOUT", "{}", 50000.0, 49000.0, 1000.0, 60.0, "ORDER_PENDING", 49500.0)
+    )
     
     # Fake old pending order
     db.execute(
@@ -128,6 +138,32 @@ def test_stale_pending_order_timeout():
     orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_stale'")
     assert orders[0]['status'] == "EXPIRED"
     assert orders[0]['fail_reason'] == "TIMEOUT"
+    
+    # Assert signal updated to FAILED_TIMEOUT
+    signals = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig_stale'")
+    assert signals[0]['status'] == "FAILED_TIMEOUT"
+
+class MockAdapter:
+    def submit_order_intent(self, order):
+        return {
+            "exchange_order_id": f"cb_{order.order_id}",
+            "submitted_at": 1000,
+            "status": "OPEN"
+        }
+
+def test_exchange_metadata_persists_on_submit():
+    exec_service = ExecutionService()
+    adapter = MockAdapter()
+    
+    db.execute(
+        "INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status, execution_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("sig_mock", "BTC-USD", "BREAKOUT", "{}", 50000.0, 49000.0, 1000.0, 60.0, "NEW", 49500.0)
+    )
+    process_consumer_tick(exec_service, adapter=adapter)
+    
+    orders = db.fetch_all("SELECT * FROM orders WHERE signal_id='sig_mock'")
+    assert orders[0]['exchange_order_id'] == f"cb_{orders[0]['order_id']}"
+    assert orders[0]['submitted_at'] == 1000
 
 def test_restart_resumes_state_cleanly():
     exec_service = ExecutionService()
