@@ -2,8 +2,8 @@ import logging
 import json
 import time
 from typing import List
-from db import db
-from models import Bar, Signal, Order
+from .db import db
+from .models import Bar, Signal, Order
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,6 @@ class Journal:
                 close=excluded.close,
                 volume=excluded.volume
         """
-        # Exact overwrite correctly aligns final volume boundaries against replay overlapping inputs dynamically avoiding double-counting functionally.
         db.execute(query, (
             bar.symbol, bar.timeframe, bar.ts_open,
             bar.open, bar.high, bar.low, bar.close, bar.volume

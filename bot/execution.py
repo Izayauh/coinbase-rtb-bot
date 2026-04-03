@@ -1,94 +1,226 @@
+import time
 import logging
 import uuid
-import time
 from typing import Optional
-from models import Order, Position
-from risk import RiskManager
-from journal import Journal
-from db import db
+from .models import Signal, Order, Position, Execution
+from .journal import Journal
+from .risk import RiskManager
 
 logger = logging.getLogger(__name__)
 
-class ExecutionEngine:
+class ExecutionService:
     def __init__(self, portfolio_value: float = 10000.0):
-        """
-        Initializes execution constraints. In completely pure CB-RTB v0, portfolio value
-        is injected/tracked externally.
-        """
         self.portfolio_value = portfolio_value
 
-    def process_pending_signals(self, latest_price: float):
+    def process_signal(self, signal: Signal) -> Optional[Order]:
         """
-        Reads pending valid signals securely exactly once natively isolating 
-        positions dynamically against execution collisions.
+        Processes an emitted signal, enforcing constraints before generating an order intent.
         """
-        query = "SELECT * FROM signals WHERE status = 'NEW'"
-        signals = db.fetch_all(query)
-        
-        for sig_row in signals:
-            signal_id = sig_row["signal_id"]
-            symbol = sig_row["symbol"]
-            
-            # 1. One-position model only
-            open_pos = Journal.get_open_position(symbol)
-            if open_pos:
-                logger.warning(f"Rejecting signal {signal_id}: Position already explicitly ACTIVE for {symbol}")
-                self._update_signal_status(signal_id, "REJECTED_ALREADY_OPEN")
-                continue
-                
-            # 2. Strict Idempotency 
-            existing_order = Journal.get_order_for_signal(signal_id)
-            if existing_order:
-                logger.warning(f"Rejecting signal {signal_id}: Order intent already distinctly exists in journal.")
-                self._update_signal_status(signal_id, "REJECTED_DUPLICATE")
-                continue
-                
-            self._attempt_entry(dict(sig_row), latest_price)
+        # 1. Execution idempotency: never create multiple live entry attempts for the same signal_id
+        existing_order_data = Journal.get_order_for_signal(signal.signal_id)
+        if existing_order_data:
+            logger.info(f"Signal {signal.signal_id} has already been processed (Idempotency Guard).")
+            return Order(**existing_order_data)
 
-    def _attempt_entry(self, signal: dict, latest_price: float):
-        signal_id = signal["signal_id"]
-        symbol = signal["symbol"]
-        
-        # Initial protection computed against signal context
-        # Buffer slightly below structural retest touch
-        stop_loss = signal["retest_level"] - (signal["atr"] * 0.5)
-        
-        # Bounded entry limits protecting against market chase
-        ioc_limit = RiskManager.get_ioc_limit(latest_price)
-        
-        # Computes natively against 0.20%
-        size = RiskManager.calculate_size(self.portfolio_value, latest_price, stop_loss)
+        # 2. One-position model
+        if Journal.has_active_exposure(signal.symbol):
+            logger.info(f"Active exposure already exists for {signal.symbol}. Rejecting signal {signal.signal_id}.")
+            return self._record_rejected_order(signal, "REJECTED_POSITION_OPEN")
+
+        # 3. Entry constraints and Risk bounds
+        entry_price = signal.execution_price
+        # The true initial stop should be structurally distinct from entry. We use signal.retest_level and ATR.
+        stop_loss = signal.retest_level - signal.atr
+
+        if entry_price <= 0 or stop_loss <= 0 or signal.atr <= 0:
+            logger.error(f"Signal {signal.signal_id} contains missing or unstructured data correctly. Rejecting.")
+            return self._record_rejected_order(signal, "REJECTED_INVALID_DATA")
+
+        size = RiskManager.calculate_size(self.portfolio_value, entry_price, stop_loss)
         if size <= 0:
-            logger.error(f"Signal {signal_id} rejected due to risk boundaries validating negative/zero sizes securely.")
-            self._update_signal_status(signal_id, "REJECTED_RISK")
+            logger.warning(f"Calculated size for {signal.signal_id} is <= 0. Rejecting.")
+            return self._record_rejected_order(signal, "REJECTED_INVALID_SIZE")
+
+        # Calculate max slippage bound for IOC
+        limit_price = RiskManager.get_ioc_limit(entry_price)
+
+        # Generate pending order intent
+        order = Order(
+            order_id=f"ord_{signal.signal_id}",
+            signal_id=signal.signal_id,
+            symbol=signal.symbol,
+            side="BUY",
+            price=limit_price,
+            size=size,
+            executed_size=0.0,
+            status="PENDING",
+            created_at=int(time.time())
+        )
+        Journal.insert_order(order.__dict__)
+        
+        return order
+
+    def _record_rejected_order(self, signal: Signal, status: str) -> Order:
+        order = Order(
+            order_id=f"ord_{signal.signal_id}_rej",
+            signal_id=signal.signal_id,
+            symbol=signal.symbol,
+            side="BUY",
+            price=signal.execution_price,
+            size=0.0,
+            executed_size=0.0,
+            status=status,
+            created_at=int(time.time())
+        )
+        Journal.insert_order(order.__dict__)
+        return order
+
+    def handle_fill(self, order: Order, signal: Signal, fill_price: float, fill_size: float, fee: float = 0.0, execution_id: Optional[str] = None):
+        """
+        Handles an execution fill and transitions order & positions safely.
+        """
+        if order.status not in ("PENDING", "PARTIAL"):
+            logger.error(f"Cannot process fill for order {order.order_id} in state {order.status}")
             return
             
-        order_id = str(uuid.uuid4())
-        
-        # Execution is fully isolated locally reflecting a secure fill constraint
-        order = {
-            "order_id": order_id,
-            "signal_id": signal_id,
-            "symbol": symbol,
-            "side": "BUY",
-            "price": ioc_limit,
-            "size": size,
-            "status": "FILLED",
-            "created_at": int(time.time())
-        }
-        Journal.insert_order(order)
-        self._update_signal_status(signal_id, "EXECUTED")
-        
-        self._create_position(symbol, latest_price, size, stop_loss)
-        
-    def _create_position(self, symbol: str, fill_price: float, size: float, stop_loss: float):
-        query = """
-            INSERT INTO positions (symbol, entry_ts, avg_entry, current_size, realized_pnl, unrealized_pnl, stop_price, state)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """
-        db.execute(query, (
-            symbol, int(time.time()), fill_price, size, 0.0, 0.0, stop_loss, "OPEN"
-        ))
+        new_executed_size = order.executed_size + fill_size
+        if new_executed_size > order.size * 1.0001:  # Allow minimal floating point slop but enforce bounds
+            logger.error(f"Fill size {fill_size} exceeds remaining order size. Rejecting invalid fill.")
+            return
 
-    def _update_signal_status(self, signal_id: str, status: str):
-        db.execute("UPDATE signals SET status=? WHERE signal_id=?", (status, signal_id))
+        exec_id_val = execution_id if execution_id else f"exec_{uuid.uuid4().hex[:8]}"
+        execution = Execution(
+            execution_id=exec_id_val,
+            order_id=order.order_id,
+            price=fill_price,
+            size=fill_size,
+            fee=fee,
+            ts=int(time.time())
+        )
+        
+        # Idempotency check on execution could be added strictly later, Journal.insert_execution can handle uniqueness
+        try:
+            Journal.insert_execution(execution.__dict__)
+        except Exception as e:
+            logger.error(f"Failed to insert execution {exec_id_val}, possibly duplicate: {e}")
+            return
+        
+        # Update order status
+        new_status = "FILLED" if new_executed_size >= order.size * 0.9999 else "PARTIAL"
+        order.status = new_status
+        order.executed_size = new_executed_size
+        Journal.update_order_execution(order.order_id, new_executed_size, new_status)
+        
+        if new_status == "FILLED":
+            Journal.update_signal_status(signal.signal_id, "ORDER_FILLED")
+        
+        # compute and persist initial stop level using the signal context
+        # do not rely on strategy state alone
+        stop_loss = signal.retest_level - signal.atr
+        
+        # Upsert position
+        open_pos_data = Journal.get_open_position(order.symbol)
+        if not open_pos_data:
+            position = Position(
+                symbol=order.symbol,
+                entry_ts=int(time.time()),
+                avg_entry=fill_price,
+                current_size=fill_size,
+                realized_pnl=0.0,
+                unrealized_pnl=0.0,
+                stop_price=stop_loss,
+                state="OPEN",
+                stop_active=True
+            )
+        else:
+            # Add to existing position
+            pos = Position(**open_pos_data)
+            new_size = pos.current_size + fill_size
+            new_avg = ((pos.avg_entry * pos.current_size) + (fill_price * fill_size)) / new_size
+            position = Position(
+                symbol=pos.symbol,
+                entry_ts=pos.entry_ts,
+                avg_entry=new_avg,
+                current_size=new_size,
+                realized_pnl=pos.realized_pnl,
+                unrealized_pnl=pos.unrealized_pnl,
+                stop_price=stop_loss, 
+                state="OPEN",
+                stop_active=True
+            )
+            
+        Journal.upsert_position(position.__dict__)
+
+    def mark_order_failed(self, order: Order):
+        order.status = "FAILED"
+        Journal.update_order_status(order.order_id, "FAILED")
+
+    def reconcile_pending_orders(self, timeout: int = 60, adapter=None):
+        """
+        Exchange-agnostic local reconciliation:
+        Checks local PENDING orders. Uses adapter for explicit exchange mapping.
+        If stale, marks EXPIRED.
+        """
+        from .db import db
+        pending_orders = Journal.get_pending_orders()
+        now = int(time.time())
+        for o_data in pending_orders:
+            order = Order(**o_data)
+            
+            # 1. Thin exchange adapter boundary
+            if adapter and not order.exchange_order_id:
+                try:
+                    ext_data = adapter.submit_order_intent(order)
+                    order.exchange_order_id = ext_data["exchange_order_id"]
+                    order.submitted_at = ext_data["submitted_at"]
+                    order.updated_at = ext_data["submitted_at"]
+                    Journal.insert_order(order.__dict__)
+                except Exception as e:
+                    logger.error(f"Failed to submit order {order.order_id}: {e}")
+                continue # Let it rest until next tick
+
+            # 2. Exchange-status reconcile
+            if adapter and order.exchange_order_id and hasattr(adapter, 'sync_get_fills'):
+                try:
+                    # Sync fills
+                    fills = adapter.sync_get_fills(order_id=order.exchange_order_id)
+                    if fills:
+                        sig_data = db.fetch_all("SELECT * FROM signals WHERE signal_id=?", (order.signal_id,))
+                        if sig_data:
+                            signal = Signal(**sig_data[0])
+                            # In Coinbase, fields are price, size, commission, trade_id
+                            for f in fills:
+                                fill_price = float(f.get('price', order.price))
+                                fill_size = float(f.get('size', 0.0))
+                                fee = float(f.get('commission', 0.0))
+                                exec_id = str(f.get('trade_id', ''))
+                                if fill_size > 0:
+                                    self.handle_fill(order, signal, fill_price, fill_size, fee, execution_id=exec_id)
+                                    
+                    # Re-eval if handle_fill advanced status
+                    if order.status != "PENDING":
+                        continue
+
+                    if hasattr(adapter, 'sync_get_order'):
+                        remote_order = adapter.sync_get_order(order.exchange_order_id)
+                        remote_status = remote_order.get("status", "")
+                        if remote_status in ["CANCELLED", "FAILED", "EXPIRED"]:
+                            logger.warning(f"Order {order.order_id} failed on exchange ({remote_status}). Marking local as FAILED.")
+                            self.mark_order_failed(order)
+                            Journal.update_signal_status(order.signal_id, "FAILED_EXCHANGE")
+                            continue
+                            
+                except Exception as e:
+                    logger.error(f"Reconciliation error for {order.order_id}: {e}")
+
+            if order.status != "PENDING":
+                continue
+                
+            # 3. Timeout checking
+            if now - order.created_at >= timeout:
+                logger.warning(f"Order {order.order_id} stale pending. Marking EXPIRED.")
+                order.status = "EXPIRED"
+                order.fail_reason = "TIMEOUT"
+                order.updated_at = now
+                Journal.insert_order(order.__dict__)
+                Journal.update_signal_status(order.signal_id, "FAILED_TIMEOUT")

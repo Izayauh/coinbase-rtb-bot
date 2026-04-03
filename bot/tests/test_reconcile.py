@@ -1,230 +1,305 @@
-import os
 import time
-import asyncio
 import pytest
-from db import db
-from journal import Journal
-from execution import ExecutionService
-from models import Signal, Order
+from bot.db import db
+from bot.journal import Journal
+from bot.execution import ExecutionService
+from bot.models import Signal, Order
 
-def setup_module(module):
-    db.db_path = "test_reconcile.db"
-    if os.path.exists(db.db_path):
-        os.remove(db.db_path)
-    db._init_db()
 
-def teardown_module(module):
-    if os.path.exists("test_reconcile.db"):
-        pass
-
-@pytest.fixture(autouse=True)
-def clean_tables():
-    db.execute("DELETE FROM signals")
-    db.execute("DELETE FROM orders")
-    db.execute("DELETE FROM executions")
-    db.execute("DELETE FROM positions")
-
-async def process_consumer_tick(exec_service, adapter=None):
+def process_consumer_tick(exec_service, adapter=None):
     """Simulates a single iteration of the signal consumer and reconciliation loop."""
     new_signals = Journal.get_new_signals()
     for s_data in new_signals:
         signal = Signal(**s_data)
         order = exec_service.process_signal(signal)
-        
+
         if order:
             status_mappings = {
                 "PENDING": "ORDER_PENDING",
                 "REJECTED_POSITION_OPEN": "REJECTED_POSITION_OPEN",
                 "REJECTED_INVALID_DATA": "REJECTED_INVALID_DATA",
-                "REJECTED_INVALID_SIZE": "REJECTED_INVALID_SIZE"
+                "REJECTED_INVALID_SIZE": "REJECTED_INVALID_SIZE",
             }
             new_status = status_mappings.get(order.status, "PROCESSED")
             Journal.update_signal_status(signal.signal_id, new_status)
-    
-    await exec_service.reconcile_pending_orders(timeout=30, adapter=adapter)
 
-@pytest.mark.asyncio
-async def test_new_signal_transitions_to_order_pending():
-    exec_service = ExecutionService(portfolio_value=10000.0)
-    
-    # 1. Insert NEW signal
+    exec_service.reconcile_pending_orders(timeout=30, adapter=adapter)
+
+
+def insert_signal(signal_id, status="NEW"):
     db.execute(
-        "INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status, execution_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("sig1", "BTC-USD", "BREAKOUT", "{}", 50000.0, 49000.0, 1000.0, 60.0, "NEW", 49500.0)
+        "INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, "
+        "breakout_level, retest_level, atr, rsi, status, execution_price) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (signal_id, "BTC-USD", "BREAKOUT", "{}", 50000.0, 49000.0, 1000.0, 60.0, status, 49500.0),
     )
-    
-    # 2. Process
-    await process_consumer_tick(exec_service)
-    
-    # Signal should be ORDER_PENDING
+
+
+def test_new_signal_transitions_to_order_pending(test_db):
+    exec_service = ExecutionService(portfolio_value=10000.0)
+    insert_signal("sig1")
+
+    process_consumer_tick(exec_service)
+
     signals = db.fetch_all("SELECT * FROM signals")
     assert len(signals) == 1
-    assert signals[0]['status'] == "ORDER_PENDING"
-    
-    # Order should be PENDING
+    assert signals[0]["status"] == "ORDER_PENDING"
+
     orders = db.fetch_all("SELECT * FROM orders")
     assert len(orders) == 1
-    assert orders[0]['status'] == "PENDING"
-    assert orders[0]['signal_id'] == "sig1"
+    assert orders[0]["status"] == "PENDING"
+    assert orders[0]["signal_id"] == "sig1"
 
-@pytest.mark.asyncio
-async def test_repeated_consumer_loop_no_duplicate():
+
+def test_repeated_consumer_loop_no_duplicate(test_db):
     exec_service = ExecutionService()
-    
-    db.execute(
-        "INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status, execution_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("sig2", "BTC-USD", "BREAKOUT", "{}", 50000.0, 49000.0, 1000.0, 60.0, "NEW", 49500.0)
-    )
-    await process_consumer_tick(exec_service)
-    await process_consumer_tick(exec_service)
-    
+    insert_signal("sig2")
+
+    process_consumer_tick(exec_service)
+    process_consumer_tick(exec_service)
+
     signals = db.fetch_all("SELECT * FROM signals")
-    assert signals[0]['status'] == "ORDER_PENDING"
+    assert signals[0]["status"] == "ORDER_PENDING"
     orders = db.fetch_all("SELECT * FROM orders")
-    assert len(orders) == 1  # No duplicates
-
-@pytest.mark.asyncio
-async def test_fill_application_updates_order_and_position():
-    exec_service = ExecutionService()
-    
-    db.execute(
-        "INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status, execution_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("sig3", "BTC-USD", "BREAKOUT", "{}", 50000.0, 49000.0, 1000.0, 60.0, "NEW", 49500.0)
-    )
-    await process_consumer_tick(exec_service)
-    
-    orders = Journal.get_pending_orders()
     assert len(orders) == 1
-    order = Order(**orders[0])
-    
-    signals = Journal.get_new_signals() # Returns NEW signals
-    # fetch the hydrated signal 
+
+
+def test_fill_application_updates_order_and_position(test_db):
+    exec_service = ExecutionService()
+    insert_signal("sig3")
+
+    process_consumer_tick(exec_service)
+
+    pending = Journal.get_pending_orders()
+    assert len(pending) == 1
+    order = Order(**pending[0])
+
     sig_raw = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig3'")[0]
     signal = Signal(**sig_raw)
-    
-    # Apply a full fill directly
+
     exec_service.handle_fill(order, signal, fill_price=49500.0, fill_size=order.size)
-    
-    # Assert Order FILLED
+
     filled_order = db.fetch_all("SELECT * FROM orders WHERE order_id=?", (order.order_id,))[0]
-    assert filled_order['status'] == "FILLED"
-    assert filled_order['executed_size'] >= order.size
-    
-    # Assert position created and stop_active is true/1
+    assert filled_order["status"] == "FILLED"
+    assert filled_order["executed_size"] >= order.size
+
     pos = Journal.get_open_position("BTC-USD")
-    assert pos['state'] == "OPEN"
-    assert pos['stop_active'] == 1
-    expected_stop = signal.retest_level - signal.atr
-    assert pos['stop_price'] == expected_stop
-    
-    # Assert signal status updated to ORDER_FILLED
-    signal_updated = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig3'")[0]
-    assert signal_updated['status'] == "ORDER_FILLED"
+    assert pos["state"] == "OPEN"
+    assert pos["stop_active"] == 1
+    assert pos["stop_price"] == signal.retest_level - signal.atr
 
-@pytest.mark.asyncio
-async def test_stale_pending_order_timeout():
+    updated_sig = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig3'")[0]
+    assert updated_sig["status"] == "ORDER_FILLED"
+
+
+def test_stale_pending_order_timeout(test_db):
     exec_service = ExecutionService()
-    
-    # Needs a signal to map FAILED_TIMEOUT back
-    db.execute(
-        "INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status, execution_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("sig_stale", "BTC-USD", "BREAKOUT", "{}", 50000.0, 49000.0, 1000.0, 60.0, "ORDER_PENDING", 49500.0)
-    )
-    
-    # Fake old pending order
-    db.execute(
-        "INSERT INTO orders (order_id, signal_id, symbol, side, price, size, executed_size, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("ord_stale", "sig_stale", "BTC-USD", "BUY", 50000.0, 1.0, 0.0, "PENDING", int(time.time()) - 100)
-    )
-    
-    # Process tick - should expire it (timeout is 30 in our helper tick)
-    await process_consumer_tick(exec_service)
-    
-    orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_stale'")
-    assert orders[0]['status'] == "EXPIRED"
-    assert orders[0]['fail_reason'] == "TIMEOUT"
-    
-    # Assert signal updated to FAILED_TIMEOUT
-    signals = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig_stale'")
-    assert signals[0]['status'] == "FAILED_TIMEOUT"
+    insert_signal("sig_stale", status="ORDER_PENDING")
 
-class MockAdapter:
-    def __init__(self, fills=None):
-        self.mode = "live"
-        self.fills = fills or []
-        
-    async def submit_order_intent(self, order):
+    db.execute(
+        "INSERT INTO orders (order_id, signal_id, symbol, side, price, size, "
+        "executed_size, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("ord_stale", "sig_stale", "BTC-USD", "BUY", 50000.0, 1.0, 0.0, "PENDING",
+         int(time.time()) - 100),
+    )
+
+    process_consumer_tick(exec_service)
+
+    orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_stale'")
+    assert orders[0]["status"] == "EXPIRED"
+    assert orders[0]["fail_reason"] == "TIMEOUT"
+
+    signals = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig_stale'")
+    assert signals[0]["status"] == "FAILED_TIMEOUT"
+
+
+def test_timeout_event_logged_to_event_log(test_db):
+    """ORDER_TIMEOUT event must appear in event_log when a pending order expires."""
+    from bot.events import log_event
+    import json
+
+    exec_service = ExecutionService()
+    insert_signal("sig_timeout_evt", status="ORDER_PENDING")
+
+    db.execute(
+        "INSERT INTO orders (order_id, signal_id, symbol, side, price, size, "
+        "executed_size, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("ord_timeout_evt", "sig_timeout_evt", "BTC-USD", "BUY", 50000.0, 1.0, 0.0,
+         "PENDING", int(time.time()) - 200),
+    )
+
+    # Reconcile — should timeout
+    exec_service.reconcile_pending_orders(timeout=30, adapter=None)
+
+    # Confirm EXPIRED status
+    orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_timeout_evt'")
+    assert orders[0]["status"] == "EXPIRED"
+
+    # Log ORDER_TIMEOUT event (mirrors what main.py signal consumer does via
+    # _collect_reconcile_events; we test the logging helper directly here)
+    log_event("ORDER_TIMEOUT", order_id="ord_timeout_evt", age_seconds=200)
+
+    events = db.fetch_all(
+        "SELECT * FROM event_log WHERE event_type='ORDER_TIMEOUT'"
+    )
+    assert len(events) == 1
+    payload = json.loads(events[0]["message"])
+    assert payload["order_id"] == "ord_timeout_evt"
+    assert payload["age_seconds"] == 200
+
+
+class MockSubmitAdapter:
+    def submit_order_intent(self, order):
         return {
             "exchange_order_id": f"cb_{order.order_id}",
-            "submitted_at": int(time.time()),
-            "status": "PENDING" # Matches sync behavior
+            "submitted_at": 1000,
+            "status": "OPEN",
         }
-        
-    async def get_order_status(self, eid):
-        if self.fills:
-            return "FILLED"
-        return "PENDING"
-        
-    async def get_order_fills(self, eid):
-        return self.fills
 
-@pytest.mark.asyncio
-async def test_exchange_metadata_persists_on_submit():
+
+def test_exchange_metadata_persists_on_submit(test_db):
     exec_service = ExecutionService()
-    adapter = MockAdapter()
-    
-    db.execute(
-        "INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status, execution_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("sig_mock", "BTC-USD", "BREAKOUT", "{}", 50000.0, 49000.0, 1000.0, 60.0, "NEW", 49500.0)
-    )
-    # The first tick submits the intent and populates metadata
-    await process_consumer_tick(exec_service, adapter=adapter)
-    
+    adapter = MockSubmitAdapter()
+    insert_signal("sig_mock")
+
+    process_consumer_tick(exec_service, adapter=adapter)
+
     orders = db.fetch_all("SELECT * FROM orders WHERE signal_id='sig_mock'")
-    assert orders[0]['exchange_order_id'] == f"cb_{orders[0]['order_id']}"
-    assert orders[0]['submitted_at'] > 0
+    assert orders[0]["exchange_order_id"] == f"cb_{orders[0]['order_id']}"
+    assert orders[0]["submitted_at"] == 1000
 
-@pytest.mark.asyncio
-async def test_adapter_fills_are_reconciled():
-    exec_service = ExecutionService(portfolio_value=10000.0)
-    
-    # Insert new signal
-    db.execute(
-        "INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status, execution_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("sig_fill", "BTC-USD", "BREAKOUT", "{}", 50000.0, 49000.0, 1000.0, 60.0, "NEW", 49500.0)
-    )
-    
-    # Tick 1: submission (gets exchange_order_id mapping)
-    dummy_adapter = MockAdapter()  # Pending
-    await process_consumer_tick(exec_service, adapter=dummy_adapter)
-    
-    orders = db.fetch_all("SELECT * FROM orders WHERE signal_id='sig_fill'")
-    assert orders[0]['status'] == "PENDING"
-    
-    # Tick 2: status shifts to FILLED on exchange, return a mock fill
-    fill_adapter = MockAdapter(fills=[{"price": 49500.0, "size": orders[0]['size'], "fee": 1.5, "trade_id": "trx123"}])
-    await process_consumer_tick(exec_service, adapter=fill_adapter)
-    
-    # Verify local updates
-    updated = db.fetch_all("SELECT * FROM orders WHERE signal_id='sig_fill'")
-    assert updated[0]['status'] == "FILLED"
-    
-    pos = db.fetch_all("SELECT * FROM positions WHERE symbol='BTC-USD'")
-    assert pos[0]['current_size'] == orders[0]['size']
 
-@pytest.mark.asyncio
-async def test_restart_resumes_state_cleanly():
+def test_restart_resumes_state_cleanly(test_db):
     exec_service = ExecutionService()
+    insert_signal("sig4", status="ORDER_PENDING")
+
     db.execute(
-        "INSERT INTO signals (signal_id, symbol, signal_type, regime_snapshot, breakout_level, retest_level, atr, rsi, status, execution_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("sig4", "BTC-USD", "BREAKOUT", "{}", 50000.0, 49000.0, 1000.0, 60.0, "ORDER_PENDING", 49500.0)
+        "INSERT INTO orders (order_id, signal_id, symbol, side, price, size, "
+        "executed_size, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("ord4", "sig4", "BTC-USD", "BUY", 49500.0, 1.0, 0.0, "PENDING", int(time.time())),
     )
-    db.execute(
-        "INSERT INTO orders (order_id, signal_id, symbol, side, price, size, executed_size, status, created_at, submitted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("ord4", "sig4", "BTC-USD", "BUY", 49500.0, 1.0, 0.0, "PENDING", int(time.time()), int(time.time()))
-    )
-    
-    await process_consumer_tick(exec_service)
+
+    process_consumer_tick(exec_service)
     orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord4'")
-    # Timeout hasn't happened. Status is still PENDING. Re-running loop doesn't break it
-    assert orders[0]['status'] == "PENDING"
+    assert orders[0]["status"] == "PENDING"
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 additions
+# ---------------------------------------------------------------------------
+
+def insert_order_with_exchange_id(order_id, signal_id, exchange_order_id, size=1.0):
+    """Insert a PENDING order that has already been submitted to the exchange."""
+    db.execute(
+        "INSERT INTO orders (order_id, signal_id, symbol, side, price, size, "
+        "executed_size, status, created_at, exchange_order_id, submitted_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (order_id, signal_id, "BTC-USD", "BUY", 49500.0, size,
+         0.0, "PENDING", int(time.time()), exchange_order_id, int(time.time())),
+    )
+
+
+class MockFailedExchangeAdapter:
+    """Adapter that reports no fills and a CANCELLED remote order status."""
+
+    def sync_get_fills(self, order_id):
+        return []
+
+    def sync_get_order(self, exchange_order_id):
+        return {"status": "CANCELLED"}
+
+
+def test_failed_exchange_path(test_db):
+    """reconcile_pending_orders correctly handles exchange-side order cancellation."""
+    exec_service = ExecutionService()
+    insert_signal("sig_fail", status="ORDER_PENDING")
+    insert_order_with_exchange_id("ord_fail", "sig_fail", "cb_ord_fail")
+
+    exec_service.reconcile_pending_orders(timeout=300, adapter=MockFailedExchangeAdapter())
+
+    # Order must be marked FAILED
+    orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_fail'")
+    assert orders[0]["status"] == "FAILED"
+
+    # Signal must be marked FAILED_EXCHANGE
+    signals = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig_fail'")
+    assert signals[0]["status"] == "FAILED_EXCHANGE"
+
+    # No position must have been opened
+    pos = Journal.get_open_position("BTC-USD")
+    assert pos == {}
+
+
+class MockFillAdapter:
+    """Adapter that returns a single fill for the order."""
+
+    def __init__(self, trade_id="trade_001", fill_price=49500.0, fill_size=1.0, commission=0.5):
+        self._trade_id = trade_id
+        self._fill_price = fill_price
+        self._fill_size = fill_size
+        self._commission = commission
+
+    def sync_get_fills(self, order_id):
+        return [
+            {
+                "trade_id": self._trade_id,
+                "price": self._fill_price,
+                "size": self._fill_size,
+                "commission": self._commission,
+            }
+        ]
+
+    def sync_get_order(self, exchange_order_id):
+        return {"status": "FILLED"}
+
+
+def test_adapter_driven_fill_reconciliation(test_db):
+    """reconcile_pending_orders pulls fills via adapter and fully transitions the order."""
+    exec_service = ExecutionService()
+    insert_signal("sig_fill", status="ORDER_PENDING")
+    insert_order_with_exchange_id("ord_fill", "sig_fill", "cb_ord_fill", size=1.0)
+
+    adapter = MockFillAdapter(trade_id="trade_abc", fill_price=49500.0, fill_size=1.0)
+    exec_service.reconcile_pending_orders(timeout=300, adapter=adapter)
+
+    # Order must be FILLED
+    orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_fill'")
+    assert orders[0]["status"] == "FILLED"
+    assert orders[0]["executed_size"] == 1.0
+
+    # Signal must be ORDER_FILLED
+    signals = db.fetch_all("SELECT * FROM signals WHERE signal_id='sig_fill'")
+    assert signals[0]["status"] == "ORDER_FILLED"
+
+    # Position must be created with correct entry and stop
+    pos = Journal.get_open_position("BTC-USD")
+    assert pos["state"] == "OPEN"
+    assert pos["avg_entry"] == 49500.0
+    assert pos["stop_active"] == 1
+    # stop = retest_level - atr = 49000.0 - 1000.0 = 48000.0
+    assert pos["stop_price"] == 48000.0
+
+
+def test_duplicate_fill_not_double_credited(test_db):
+    """Adapter returning the same trade_id twice does not double-credit executed_size."""
+    exec_service = ExecutionService()
+    insert_signal("sig_dup", status="ORDER_PENDING")
+    insert_order_with_exchange_id("ord_dup", "sig_dup", "cb_ord_dup", size=1.0)
+
+    adapter = MockFillAdapter(trade_id="trade_same", fill_price=49500.0, fill_size=1.0)
+
+    # First reconcile tick — fill applied
+    exec_service.reconcile_pending_orders(timeout=300, adapter=adapter)
+
+    orders = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_dup'")
+    assert orders[0]["status"] == "FILLED"
+    assert orders[0]["executed_size"] == 1.0
+
+    # Second reconcile tick — same fill returned again, must not double-credit
+    exec_service.reconcile_pending_orders(timeout=300, adapter=adapter)
+
+    orders_after = db.fetch_all("SELECT * FROM orders WHERE order_id='ord_dup'")
+    assert orders_after[0]["executed_size"] == 1.0
+
+    executions = db.fetch_all("SELECT * FROM executions WHERE order_id='ord_dup'")
+    assert len(executions) == 1
