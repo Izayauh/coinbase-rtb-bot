@@ -34,6 +34,18 @@ class Database:
             key TEXT PRIMARY KEY,
             value TEXT
         );
+        
+        CREATE TABLE IF NOT EXISTS signals (
+            signal_id TEXT PRIMARY KEY,
+            symbol TEXT,
+            signal_type TEXT,
+            regime_snapshot TEXT,
+            breakout_level REAL,
+            retest_level REAL,
+            atr REAL,
+            rsi REAL,
+            status TEXT
+        );
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
