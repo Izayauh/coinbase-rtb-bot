@@ -1,0 +1,248 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.0.2, pluggy-1.6.0
+rootdir: C:\Users\isaia\Projects\ai-agents\crypto_trading
+collected 7 items
+
+bot\tests\test_state_machine.py .E.E.E.EFE.EFE                           [100%]
+
+=================================== ERRORS ====================================
+_________ ERROR at teardown of test_unchanged_4h_context_advances_1h __________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000024D75809220>
+
+    @pytest.fixture
+    def temp_db(monkeypatch):
+        test_path = "test_sm_journal.db"
+        if os.path.exists(test_path):
+            os.remove(test_path)
+        from db import Database
+        import db as global_db
+        import journal
+        import state_machine
+        test_db = Database(test_path)
+        monkeypatch.setattr(global_db, 'db', test_db)
+        monkeypatch.setattr(journal, 'db', test_db)
+        monkeypatch.setattr(state_machine, 'db', test_db)
+        yield test_db
+>       if test_db.conn:
+           ^^^^^^^^^^^^
+E       AttributeError: 'Database' object has no attribute 'conn'
+
+bot\tests\test_state_machine.py:25: AttributeError
+_________ ERROR at teardown of test_repeated_processing_is_idempotent _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000024D7580BF50>
+
+    @pytest.fixture
+    def temp_db(monkeypatch):
+        test_path = "test_sm_journal.db"
+        if os.path.exists(test_path):
+            os.remove(test_path)
+        from db import Database
+        import db as global_db
+        import journal
+        import state_machine
+        test_db = Database(test_path)
+        monkeypatch.setattr(global_db, 'db', test_db)
+        monkeypatch.setattr(journal, 'db', test_db)
+        monkeypatch.setattr(state_machine, 'db', test_db)
+        yield test_db
+>       if test_db.conn:
+           ^^^^^^^^^^^^
+E       AttributeError: 'Database' object has no attribute 'conn'
+
+bot\tests\test_state_machine.py:25: AttributeError
+_____________ ERROR at teardown of test_out_of_order_bars_ignored _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000024D7580B1A0>
+
+    @pytest.fixture
+    def temp_db(monkeypatch):
+        test_path = "test_sm_journal.db"
+        if os.path.exists(test_path):
+            os.remove(test_path)
+        from db import Database
+        import db as global_db
+        import journal
+        import state_machine
+        test_db = Database(test_path)
+        monkeypatch.setattr(global_db, 'db', test_db)
+        monkeypatch.setattr(journal, 'db', test_db)
+        monkeypatch.setattr(state_machine, 'db', test_db)
+        yield test_db
+>       if test_db.conn:
+           ^^^^^^^^^^^^
+E       AttributeError: 'Database' object has no attribute 'conn'
+
+bot\tests\test_state_machine.py:25: AttributeError
+______________ ERROR at teardown of test_four_hour_gap_disables _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000024D75809250>
+
+    @pytest.fixture
+    def temp_db(monkeypatch):
+        test_path = "test_sm_journal.db"
+        if os.path.exists(test_path):
+            os.remove(test_path)
+        from db import Database
+        import db as global_db
+        import journal
+        import state_machine
+        test_db = Database(test_path)
+        monkeypatch.setattr(global_db, 'db', test_db)
+        monkeypatch.setattr(journal, 'db', test_db)
+        monkeypatch.setattr(state_machine, 'db', test_db)
+        yield test_db
+>       if test_db.conn:
+           ^^^^^^^^^^^^
+E       AttributeError: 'Database' object has no attribute 'conn'
+
+bot\tests\test_state_machine.py:25: AttributeError
+------------------------------ Captured log call ------------------------------
+WARNING  state_machine:state_machine.py:85 4h structure failure due to gap. Disabled.
+___________ ERROR at teardown of test_full_lifecycle_single_signal ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000024D758082F0>
+
+    @pytest.fixture
+    def temp_db(monkeypatch):
+        test_path = "test_sm_journal.db"
+        if os.path.exists(test_path):
+            os.remove(test_path)
+        from db import Database
+        import db as global_db
+        import journal
+        import state_machine
+        test_db = Database(test_path)
+        monkeypatch.setattr(global_db, 'db', test_db)
+        monkeypatch.setattr(journal, 'db', test_db)
+        monkeypatch.setattr(state_machine, 'db', test_db)
+        yield test_db
+>       if test_db.conn:
+           ^^^^^^^^^^^^
+E       AttributeError: 'Database' object has no attribute 'conn'
+
+bot\tests\test_state_machine.py:25: AttributeError
+_________ ERROR at teardown of test_bearish_regime_invalidates_retest _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000024D75839CD0>
+
+    @pytest.fixture
+    def temp_db(monkeypatch):
+        test_path = "test_sm_journal.db"
+        if os.path.exists(test_path):
+            os.remove(test_path)
+        from db import Database
+        import db as global_db
+        import journal
+        import state_machine
+        test_db = Database(test_path)
+        monkeypatch.setattr(global_db, 'db', test_db)
+        monkeypatch.setattr(journal, 'db', test_db)
+        monkeypatch.setattr(state_machine, 'db', test_db)
+        yield test_db
+>       if test_db.conn:
+           ^^^^^^^^^^^^
+E       AttributeError: 'Database' object has no attribute 'conn'
+
+bot\tests\test_state_machine.py:25: AttributeError
+________________ ERROR at teardown of test_restart_persistence ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000024D7583A3C0>
+
+    @pytest.fixture
+    def temp_db(monkeypatch):
+        test_path = "test_sm_journal.db"
+        if os.path.exists(test_path):
+            os.remove(test_path)
+        from db import Database
+        import db as global_db
+        import journal
+        import state_machine
+        test_db = Database(test_path)
+        monkeypatch.setattr(global_db, 'db', test_db)
+        monkeypatch.setattr(journal, 'db', test_db)
+        monkeypatch.setattr(state_machine, 'db', test_db)
+        yield test_db
+>       if test_db.conn:
+           ^^^^^^^^^^^^
+E       AttributeError: 'Database' object has no attribute 'conn'
+
+bot\tests\test_state_machine.py:25: AttributeError
+================================== FAILURES ===================================
+______________________ test_full_lifecycle_single_signal ______________________
+
+temp_db = <db.Database object at 0x0000024D75808DA0>, mock_indicators = None
+
+    def test_full_lifecycle_single_signal(temp_db, mock_indicators):
+        sm = StateMachine()
+        bars_4h = generate_bars(205, "4h")
+        bars_1h = generate_bars(25, "1h", close_val=100.0, high_val=110.0)
+    
+        sm.process_bars(bars_1h, bars_4h)
+    
+        # 1. Breakout
+        ts = bars_1h[-1].ts_open
+        b1 = Bar("BTC-USD", "1h", ts + 3600, 100.0, 150.0, 90.0, 140.0, 500.0)
+        bars_1h.append(b1)
+        sm.process_bars(bars_1h, bars_4h)
+    
+        setup_id = sm.setup_id
+        assert setup_id is not None
+    
+        # 2. Retest
+        b2 = Bar("BTC-USD", "1h", ts + 7200, 140.0, 140.0, 80.0, 115.0, 50.0)
+        bars_1h.append(b2)
+        sm.process_bars(bars_1h, bars_4h)
+>       assert sm.state == StateMachine.RETEST_CONFIRMED
+E       AssertionError: assert 'WAITING_RETEST' == 'RETEST_CONFIRMED'
+E         
+E         - RETEST_CONFIRMED
+E         + WAITING_RETEST
+
+bot\tests\test_state_machine.py:128: AssertionError
+__________________________ test_restart_persistence ___________________________
+
+temp_db = <db.Database object at 0x0000024D75839910>, mock_indicators = None
+
+    def test_restart_persistence(temp_db, mock_indicators):
+        sm = StateMachine()
+        bars_4h = generate_bars(205, "4h")
+        bars_1h = generate_bars(25, "1h", close_val=100.0, high_val=110.0)
+    
+        # Breakout
+        b1 = Bar("BTC-USD", "1h", bars_1h[-1].ts_open + 3600, 100.0, 150.0, 90.0, 140.0, 500.0)
+        bars_1h.append(b1)
+        sm.process_bars(bars_1h, bars_4h)
+    
+        assert sm.state == StateMachine.WAITING_RETEST
+        setup_id = sm.setup_id
+    
+        # Simulate restart by instantiating new state machine
+        sm2 = StateMachine()
+        assert sm2.state == StateMachine.WAITING_RETEST
+        assert sm2.setup_id == setup_id
+    
+        # Send a valid retest to the fresh instance
+        b2 = Bar("BTC-USD", "1h", bars_1h[-1].ts_open + 3600, 140.0, 140.0, 80.0, 115.0, 50.0)
+        bars_1h.append(b2)
+        sm2.process_bars(bars_1h, bars_4h)
+    
+>       assert sm2.state == StateMachine.RETEST_CONFIRMED
+E       AssertionError: assert 'WAITING_RETEST' == 'RETEST_CONFIRMED'
+E         
+E         - RETEST_CONFIRMED
+E         + WAITING_RETEST
+
+bot\tests\test_state_machine.py:202: AssertionError
+=========================== short test summary info ===========================
+FAILED bot/tests/test_state_machine.py::test_full_lifecycle_single_signal - A...
+FAILED bot/tests/test_state_machine.py::test_restart_persistence - AssertionE...
+ERROR bot/tests/test_state_machine.py::test_unchanged_4h_context_advances_1h
+ERROR bot/tests/test_state_machine.py::test_repeated_processing_is_idempotent
+ERROR bot/tests/test_state_machine.py::test_out_of_order_bars_ignored - Attri...
+ERROR bot/tests/test_state_machine.py::test_four_hour_gap_disables - Attribut...
+ERROR bot/tests/test_state_machine.py::test_full_lifecycle_single_signal - At...
+ERROR bot/tests/test_state_machine.py::test_bearish_regime_invalidates_retest
+ERROR bot/tests/test_state_machine.py::test_restart_persistence - AttributeEr...
+==================== 2 failed, 5 passed, 7 errors in 0.35s ====================
