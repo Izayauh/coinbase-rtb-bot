@@ -43,7 +43,7 @@ async def signal_consumer_task(exec_service, adapter):
                     Journal.update_signal_status(signal.signal_id, new_status)
             
             # Reconcile loop
-            exec_service.reconcile_pending_orders(adapter=adapter)
+            await exec_service.reconcile_pending_orders(adapter=adapter)
         except Exception as e:
             logger.error(f"Error in signal consumer: {e}")
         

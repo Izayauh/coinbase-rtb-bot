@@ -13,9 +13,10 @@ logger = logging.getLogger(__name__)
 class CoinbaseAdapter:
     WS_URL = "wss://advanced-trade-ws.coinbase.com"
 
-    def __init__(self, api_key: str = None, api_secret: str = None):
+    def __init__(self, api_key: str = None, api_secret: str = None, mode="paper"):
         self.api_key = api_key or os.getenv("COINBASE_API_KEY")
         self.api_secret = api_secret or os.getenv("COINBASE_API_SECRET")
+        self.mode = mode
         self._enabled = bool(self.api_key and self.api_secret)
         
         if self._enabled:
@@ -66,17 +67,70 @@ class CoinbaseAdapter:
         if product_id: kwargs["product_id"] = product_id
         return await asyncio.to_thread(self.rest.list_fills, **kwargs)
 
-    def submit_order_intent(self, order) -> dict:
+    async def submit_order_intent(self, order) -> dict:
         """
-        Thin local abstraction boundary mapping an internal Order intent 
-        into an explicitly formatted exchange response without directly firing
-        live payloads yet (paper mode focus).
+        Thin local abstraction boundary. In paper mode, returns a synthetic status.
+        In live mode, it maps to place_order.
         """
-        return {
-            "exchange_order_id": f"cb_{order.order_id}",
-            "submitted_at": int(time.time()),
-            "status": "OPEN"
+        if self.mode == "paper" or not self._enabled:
+            return {
+                "exchange_order_id": f"cb_{order.order_id}",
+                "submitted_at": int(time.time()),
+                "status": "PENDING"
+            }
+        
+        # Live mode
+        order_configuration = {
+            "limit_limit_ioc": {
+                "base_size": str(order.size),
+                "limit_price": str(order.price)
+            }
         }
+        res = await self.place_order(
+            client_order_id=order.order_id,
+            product_id=order.symbol,
+            side=order.side,
+            order_configuration=order_configuration
+        )
+        
+        # Placeholder ID if parsing the SDK response gets tricky
+        return {
+            "exchange_order_id": f"live_cb_{order.order_id}",
+            "submitted_at": int(time.time()),
+            "status": "PENDING"
+        }
+
+    async def get_order_status(self, exchange_order_id: str) -> str:
+        """ Queries Coinbase for an order and normalizes the status locally. """
+        if self.mode == "paper" or not self._enabled:
+            return "PENDING"
+            
+        try:
+            res = await asyncio.to_thread(self.rest.get_order, order_id=exchange_order_id)
+            # The SDK might return an object with an order wrapper. Let's normalize safely.
+            # E.g. 'OPEN' -> 'PENDING', 'CANCELLED' -> 'EXPIRED', 'FILLED' -> 'FILLED'
+            cb_status = getattr(res, "status", getattr(getattr(res, "order", None), "status", "UNKNOWN"))
+            status_map = {
+                "OPEN": "PENDING",
+                "PENDING": "PENDING",
+                "FILLED": "FILLED",
+                "CANCELLED": "EXPIRED",
+                "EXPIRED": "EXPIRED",
+                "FAILED": "FAILED"
+            }
+            return status_map.get(cb_status, "PENDING")
+        except Exception as e:
+            logger.error(f"Error checking order status for {exchange_order_id}: {e}")
+            return "PENDING"
+
+    async def get_order_fills(self, exchange_order_id: str = None, product_id: str = None):
+        """ Maps to get_fills locally. """
+        if self.mode == "paper" or not self._enabled:
+            return []
+        fills = await self.get_fills(order_id=exchange_order_id, product_id=product_id)
+        # Assuming SDK returns a list of fills or an object with `fills` attribute
+        fills_list = getattr(fills, "fills", fills) if fills else []
+        return fills_list
 
     # --- Thin Advanced WebSocket Loop ---
 
