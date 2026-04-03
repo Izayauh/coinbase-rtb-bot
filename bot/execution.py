@@ -126,7 +126,8 @@ class ExecutionService:
                 realized_pnl=0.0,
                 unrealized_pnl=0.0,
                 stop_price=stop_loss,
-                state="OPEN"
+                state="OPEN",
+                stop_active=True
             )
         else:
             # Add to existing position
@@ -141,7 +142,8 @@ class ExecutionService:
                 realized_pnl=pos.realized_pnl,
                 unrealized_pnl=pos.unrealized_pnl,
                 stop_price=stop_loss, 
-                state="OPEN"
+                state="OPEN",
+                stop_active=True
             )
             
         Journal.upsert_position(position.__dict__)
@@ -149,3 +151,20 @@ class ExecutionService:
     def mark_order_failed(self, order: Order):
         order.status = "FAILED"
         Journal.update_order_status(order.order_id, "FAILED")
+
+    def reconcile_pending_orders(self, timeout: int = 60):
+        """
+        Exchange-agnostic local reconciliation:
+        Checks local PENDING orders. If stale, marks EXPIRED.
+        In a real connection, this would query exchange explicitly or apply fills.
+        """
+        pending_orders = Journal.get_pending_orders()
+        now = int(time.time())
+        for o_data in pending_orders:
+            order = Order(**o_data)
+            if now - order.created_at >= timeout:
+                logger.warning(f"Order {order.order_id} stale pending. Marking EXPIRED.")
+                order.status = "EXPIRED"
+                order.fail_reason = "TIMEOUT"
+                order.updated_at = now
+                Journal.insert_order(order.__dict__)

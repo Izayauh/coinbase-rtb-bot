@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 @dataclass
 class Bar:
@@ -35,6 +36,10 @@ class Order:
     executed_size: float
     status: str
     created_at: int
+    exchange_order_id: Optional[str] = None
+    submitted_at: Optional[int] = None
+    updated_at: Optional[int] = None
+    fail_reason: Optional[str] = None
 
 @dataclass
 class Position:
@@ -46,6 +51,7 @@ class Position:
     unrealized_pnl: float
     stop_price: float
     state: str
+    stop_active: bool = False
 
 @dataclass
 class Execution:

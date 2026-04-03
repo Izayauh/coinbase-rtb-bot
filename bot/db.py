@@ -58,6 +58,10 @@ class Database:
             executed_size REAL,
             status TEXT,
             created_at INTEGER,
+            exchange_order_id TEXT,
+            submitted_at INTEGER,
+            updated_at INTEGER,
+            fail_reason TEXT,
             FOREIGN KEY(signal_id) REFERENCES signals(signal_id)
         );
 
@@ -79,7 +83,8 @@ class Database:
             realized_pnl REAL,
             unrealized_pnl REAL,
             stop_price REAL,
-            state TEXT
+            state TEXT,
+            stop_active INTEGER
         );
         """
         try:
@@ -95,7 +100,16 @@ class Database:
         """Lightweight SQLite migration routine to add missing columns"""
         expected_columns = {
             "signals": {"execution_price": "REAL"},
-            "orders": {"executed_size": "REAL"}
+            "orders": {
+                "executed_size": "REAL",
+                "exchange_order_id": "TEXT",
+                "submitted_at": "INTEGER",
+                "updated_at": "INTEGER",
+                "fail_reason": "TEXT"
+            },
+            "positions": {
+                "stop_active": "INTEGER"
+            }
         }
         
         cursor = conn.cursor()

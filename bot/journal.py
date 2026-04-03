@@ -1,8 +1,9 @@
 import logging
 import json
 import time
+from typing import List
 from db import db
-from models import Bar
+from models import Bar, Signal, Order
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,16 @@ class Journal:
         return {}
 
     @staticmethod
+    def get_new_signals() -> List[dict]:
+        query = "SELECT * FROM signals WHERE status='NEW'"
+        return [dict(r) for r in db.fetch_all(query)]
+
+    @staticmethod
+    def update_signal_status(signal_id: str, status: str):
+        query = "UPDATE signals SET status=? WHERE signal_id=?"
+        db.execute(query, (status, signal_id))
+
+    @staticmethod
     def get_open_position(symbol: str) -> dict:
         query = "SELECT * FROM positions WHERE symbol=? AND state IN ('OPEN', 'PENDING')"
         rows = db.fetch_all(query, (symbol,))
@@ -68,15 +79,31 @@ class Journal:
     @staticmethod
     def insert_order(order_data: dict):
         query = """
-            INSERT INTO orders (order_id, signal_id, symbol, side, price, size, executed_size, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(order_id) DO UPDATE SET status=excluded.status, executed_size=excluded.executed_size
+            INSERT INTO orders (
+                order_id, signal_id, symbol, side, price, size, executed_size, status, created_at,
+                exchange_order_id, submitted_at, updated_at, fail_reason
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(order_id) DO UPDATE SET 
+                status=excluded.status, 
+                executed_size=excluded.executed_size,
+                exchange_order_id=excluded.exchange_order_id,
+                submitted_at=excluded.submitted_at,
+                updated_at=excluded.updated_at,
+                fail_reason=excluded.fail_reason
         """
         db.execute(query, (
             order_data['order_id'], order_data['signal_id'], order_data['symbol'],
             order_data['side'], order_data['price'], order_data['size'],
-            order_data.get('executed_size', 0.0), order_data['status'], order_data['created_at']
+            order_data.get('executed_size', 0.0), order_data['status'], order_data['created_at'],
+            order_data.get('exchange_order_id'), order_data.get('submitted_at'), 
+            order_data.get('updated_at'), order_data.get('fail_reason')
         ))
+
+    @staticmethod
+    def get_pending_orders() -> List[dict]:
+        query = "SELECT * FROM orders WHERE status='PENDING'"
+        return [dict(r) for r in db.fetch_all(query)]
 
     @staticmethod
     def get_order_for_signal(signal_id: str) -> dict:
@@ -109,8 +136,8 @@ class Journal:
     @staticmethod
     def upsert_position(position_data: dict):
         query = """
-            INSERT INTO positions (symbol, entry_ts, avg_entry, current_size, realized_pnl, unrealized_pnl, stop_price, state)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO positions (symbol, entry_ts, avg_entry, current_size, realized_pnl, unrealized_pnl, stop_price, state, stop_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol) DO UPDATE SET
                 entry_ts=excluded.entry_ts,
                 avg_entry=excluded.avg_entry,
@@ -118,11 +145,13 @@ class Journal:
                 realized_pnl=excluded.realized_pnl,
                 unrealized_pnl=excluded.unrealized_pnl,
                 stop_price=excluded.stop_price,
-                state=excluded.state
+                state=excluded.state,
+                stop_active=excluded.stop_active
         """
         db.execute(query, (
             position_data['symbol'], position_data['entry_ts'],
             position_data['avg_entry'], position_data['current_size'],
             position_data['realized_pnl'], position_data['unrealized_pnl'],
-            position_data['stop_price'], position_data['state']
+            position_data['stop_price'], position_data['state'],
+            1 if position_data.get('stop_active') else 0
         ))
