@@ -141,3 +141,47 @@ def test_disabled_state_persists_across_restart(test_db):
     # New instance — simulates restart
     sg2 = _make_safeguards(trading_enabled=True)
     assert sg2.trading_enabled is False
+
+
+def test_tripped_set_persists_across_restart(test_db):
+    """_tripped must be restored from DB so guard metadata survives restart."""
+    sg1 = _make_safeguards()
+    sg1.disable("stop_required")
+    assert "stop_required" in sg1._tripped
+
+    sg2 = _make_safeguards()
+    assert "stop_required" in sg2._tripped
+
+
+def test_stale_stream_recovery_blocked_when_stop_required_tripped(test_db):
+    """
+    Safety-critical: stale_stream recovery must NOT re-enable trading when
+    stop_required was also tripped in a previous session.
+
+    Sequence:
+      Session 1 — stop_required trips.
+      Restart    — new instance loads _tripped from DB.
+      Session 2  — stale_stream trips, then recovers.
+      Expected   — trading remains disabled (stop_required is non-recoverable).
+    """
+    # Session 1: trip stop_required
+    sg1 = _make_safeguards()
+    sg1.disable("stop_required")
+    assert sg1.trading_enabled is False
+
+    # Restart: new instance should restore _tripped
+    sg2 = _make_safeguards()
+    assert "stop_required" in sg2._tripped
+    assert sg2.trading_enabled is False
+
+    # Session 2: stale_stream trips
+    md = _FakeMDProcessor(last_trade_ts=time.time() - 20)
+    sg2.set_md_processor(md)
+    sg2.can_trade()
+    assert "stale_stream" in sg2._tripped
+
+    # stale_stream recovers — trading must stay disabled because stop_required is present
+    md.last_trade_ts = time.time()
+    result = sg2.can_trade()
+    assert result is False
+    assert sg2.trading_enabled is False

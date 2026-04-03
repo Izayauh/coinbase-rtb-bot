@@ -170,7 +170,10 @@ class CoinbaseAdapter:
                 await asyncio.sleep(5)
 
     def ws_connect(self, product_ids: List[str]):
-        if not self._enabled: return
+        # market_trades and heartbeats are public channels — no credentials
+        # required. The ws_loop payload builder omits the JWT when _enabled=False.
+        # Only the user channel (private order events) requires auth, and ws_loop
+        # skips that subscription when _enabled=False.
         self.ws_task = asyncio.create_task(self.ws_loop(product_ids))
 
     def ws_disconnect(self):

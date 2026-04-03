@@ -45,14 +45,21 @@ class Safeguards:
         else:
             self._trading_enabled = trading_enabled
 
+        # Restore tripped-guard metadata so recovery logic and non-recoverable
+        # guards (stop_required) behave correctly across restarts.
+        if persisted and "tripped" in persisted:
+            self._tripped: set = set(persisted["tripped"])
+        else:
+            self._tripped: set = set()
+
         if not self._trading_enabled:
-            logger.warning("Safeguards: trading_enabled=False loaded from persisted state.")
+            logger.warning(
+                "Safeguards: trading_enabled=False loaded from persisted state. "
+                "Tripped guards: %s", self._tripped
+            )
 
         # Reference to MarketDataProcessor (set after init via set_md_processor)
         self._md_processor = None
-
-        # Track which guards have fired this session (for logging idempotency)
-        self._tripped: set = set()
 
     # ------------------------------------------------------------------
     # Wiring

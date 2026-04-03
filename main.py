@@ -80,8 +80,8 @@ def _check_fills_and_positions(exec_service: ExecutionService, safeguards: Safeg
     """After reconcile, verify stop invariant on any open position."""
     pos = Journal.get_open_position(symbol)
     if pos:
-        safeguards.check_stop_invariant(symbol)
-        if not safeguards.trading_enabled:
+        ok = safeguards.check_stop_invariant(symbol)
+        if not ok:
             log_event(
                 "STOP_REQUIRED",
                 symbol=symbol,
@@ -95,21 +95,28 @@ def _collect_reconcile_events(before_orders: dict, symbol: str) -> None:
     Log ORDER_SUBMITTED, ORDER_FILLED, ORDER_FAILED_EXCHANGE, ORDER_TIMEOUT,
     and POSITION_OPENED events by comparing order/position state before and
     after reconcile.
+
+    before_orders format: {order_id: {"status": str, "exchange_order_id": str|None}}
+    Snapshot must be taken after _process_new_signals so new orders are visible.
+    ORDER_SUBMITTED fires on the None->present transition of exchange_order_id.
     """
-    # Re-read all orders for the symbol that were previously PENDING
-    for order_id, prev_status in before_orders.items():
+    for order_id, prev in before_orders.items():
         rows = db.fetch_all("SELECT * FROM orders WHERE order_id=?", (order_id,))
         if not rows:
             continue
         row = rows[0]
+        prev_status = prev["status"]
+        prev_exch_id = prev["exchange_order_id"]
         cur_status = row["status"]
+        cur_exch_id = row.get("exchange_order_id")
 
-        if prev_status == "PENDING" and cur_status == "PENDING" and row.get("exchange_order_id"):
-            # Just got submitted this tick
+        if (prev_status == "PENDING" and cur_status == "PENDING"
+                and prev_exch_id is None and cur_exch_id):
+            # exchange_order_id just appeared — order was submitted this tick
             log_event(
                 "ORDER_SUBMITTED",
                 order_id=order_id,
-                exchange_order_id=row["exchange_order_id"],
+                exchange_order_id=cur_exch_id,
             )
         elif prev_status in ("PENDING", "PARTIAL") and cur_status == "FILLED":
             log_event(
@@ -189,13 +196,25 @@ async def signal_consumer_task(
     logger.info("Signal consumer task starting.")
     while True:
         try:
-            # Snapshot pending orders before reconcile to detect transitions
-            pending_rows = db.fetch_all(
-                "SELECT order_id, status FROM orders WHERE status IN ('PENDING','PARTIAL')"
-            )
-            before_orders = {r["order_id"]: r["status"] for r in pending_rows}
-
+            # Process new signals first so newly created orders are visible
+            # in the snapshot taken below.
             _process_new_signals(exec_service, safeguards)
+
+            # Snapshot after new orders exist but before reconcile submits them.
+            # Captures exchange_order_id=None so the None->present transition
+            # can be detected to emit ORDER_SUBMITTED exactly once per order.
+            pending_rows = db.fetch_all(
+                "SELECT order_id, status, exchange_order_id "
+                "FROM orders WHERE status IN ('PENDING','PARTIAL')"
+            )
+            before_orders = {
+                r["order_id"]: {
+                    "status": r["status"],
+                    "exchange_order_id": r["exchange_order_id"],
+                }
+                for r in pending_rows
+            }
+
             exec_service.reconcile_pending_orders(timeout=max_pending_age, adapter=adapter)
             _collect_reconcile_events(before_orders, symbol)
             _check_fills_and_positions(exec_service, safeguards, symbol)
