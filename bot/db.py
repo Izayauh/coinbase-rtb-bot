@@ -46,6 +46,39 @@ class Database:
             rsi REAL,
             status TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS orders (
+            order_id TEXT PRIMARY KEY,
+            signal_id TEXT UNIQUE,
+            symbol TEXT,
+            side TEXT,
+            price REAL,
+            size REAL,
+            status TEXT,
+            created_at INTEGER,
+            FOREIGN KEY(signal_id) REFERENCES signals(signal_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS executions (
+            execution_id TEXT PRIMARY KEY,
+            order_id TEXT,
+            price REAL,
+            size REAL,
+            fee REAL,
+            ts INTEGER,
+            FOREIGN KEY(order_id) REFERENCES orders(order_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS positions (
+            symbol TEXT PRIMARY KEY,
+            entry_ts INTEGER,
+            avg_entry REAL,
+            current_size REAL,
+            realized_pnl REAL,
+            unrealized_pnl REAL,
+            stop_price REAL,
+            state TEXT
+        );
         """
         try:
             with sqlite3.connect(self.db_path) as conn:

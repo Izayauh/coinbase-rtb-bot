@@ -24,6 +24,17 @@ class Signal:
     status: str
 
 @dataclass
+class Order:
+    order_id: str
+    signal_id: str
+    symbol: str
+    side: str
+    price: float
+    size: float
+    status: str
+    created_at: int
+
+@dataclass
 class Position:
     symbol: str
     entry_ts: int
@@ -32,5 +43,13 @@ class Position:
     realized_pnl: float
     unrealized_pnl: float
     stop_price: float
-    trail_price: float
     state: str
+
+@dataclass
+class Execution:
+    execution_id: str
+    order_id: str
+    price: float
+    size: float
+    fee: float
+    ts: int
