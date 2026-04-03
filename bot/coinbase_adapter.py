@@ -66,6 +66,46 @@ class CoinbaseAdapter:
         if product_id: kwargs["product_id"] = product_id
         return await asyncio.to_thread(self.rest.list_fills, **kwargs)
 
+    def sync_get_fills(self, order_id: str = None) -> list:
+        """Synchronous wrapper for real exchange reconciliation inside execution loops."""
+        if not self._enabled: return []
+        try:
+            kwargs = {}
+            if order_id: kwargs["order_id"] = order_id
+            res = self.rest.list_fills(**kwargs)
+            # The Coinbase API generally returns a dict with a 'fills' key, or an iterator depending on wrapper.
+            # Easiest is to traverse the iterator or list structure safely
+            if hasattr(res, 'fills'): 
+                return res.fills
+            elif isinstance(res, dict) and 'fills' in res:
+                return res.get('fills', [])
+            elif isinstance(res, list):
+                return res
+            elif hasattr(res, 'to_dict'):
+                d = res.to_dict()
+                return d.get('fills', [])
+            return []
+        except Exception as e:
+            logger.error(f"Failed to fetch fills for {order_id}: {e}")
+            return []
+
+    def sync_get_order(self, order_id: str) -> dict:
+        """Synchronous wrapper to get precise remote order status."""
+        if not self._enabled: return {}
+        try:
+            res = self.rest.get_order(order_id)
+            if hasattr(res, 'order'): 
+                return res.order
+            elif hasattr(res, 'to_dict'):
+                d = res.to_dict()
+                return d.get('order', {})
+            elif isinstance(res, dict) and 'order' in res:
+                return res.get('order', {})
+            return res if isinstance(res, dict) else {}
+        except Exception as e:
+            logger.error(f"Failed to fetch order status {order_id}: {e}")
+            return {}
+
     def submit_order_intent(self, order) -> dict:
         """
         Thin local abstraction boundary mapping an internal Order intent 

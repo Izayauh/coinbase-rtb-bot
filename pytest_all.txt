@@ -1,0 +1,24 @@
+C:\Users\isaia\AppData\Local\Programs\Python\Python312\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.3.0)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-7.4.3, pluggy-1.6.0 -- C:\Users\isaia\AppData\Local\Programs\Python\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\isaia\Projects\ai-agents\crypto_trading
+plugins: anyio-4.12.1, langsmith-0.4.56, asyncio-0.21.1
+asyncio: mode=Mode.STRICT
+collecting ... collected 26 items / 1 error
+
+=================================== ERRORS ====================================
+_______________ ERROR collecting bot/tests/test_db_migration.py _______________
+ImportError while importing test module 'C:\Users\isaia\Projects\ai-agents\crypto_trading\bot\tests\test_db_migration.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+..\..\..\AppData\Local\Programs\Python\Python312\Lib\importlib\__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+bot\tests\test_db_migration.py:4: in <module>
+    from bot.db import Database
+E   ModuleNotFoundError: No module named 'bot'
+=========================== short test summary info ===========================
+ERROR bot/tests/test_db_migration.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+============================== 1 error in 0.24s ===============================

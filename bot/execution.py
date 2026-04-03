@@ -161,6 +161,7 @@ class ExecutionService:
         Checks local PENDING orders. Uses adapter for explicit exchange mapping.
         If stale, marks EXPIRED.
         """
+        from db import db
         pending_orders = Journal.get_pending_orders()
         now = int(time.time())
         for o_data in pending_orders:
@@ -168,17 +169,52 @@ class ExecutionService:
             
             # 1. Thin exchange adapter boundary
             if adapter and not order.exchange_order_id:
-                ext_data = adapter.submit_order_intent(order)
-                order.exchange_order_id = ext_data["exchange_order_id"]
-                order.submitted_at = ext_data["submitted_at"]
-                order.updated_at = ext_data["submitted_at"]
-                Journal.insert_order(order.__dict__)
+                try:
+                    ext_data = adapter.submit_order_intent(order)
+                    order.exchange_order_id = ext_data["exchange_order_id"]
+                    order.submitted_at = ext_data["submitted_at"]
+                    order.updated_at = ext_data["submitted_at"]
+                    Journal.insert_order(order.__dict__)
+                except Exception as e:
+                    logger.error(f"Failed to submit order {order.order_id}: {e}")
                 continue # Let it rest until next tick
 
-            # 2. Exchange-status reconcile placeholder
-            if adapter and order.exchange_order_id:
-                # e.g., current_status = adapter.get_order_status(order.exchange_order_id)
-                pass
+            # 2. Exchange-status reconcile
+            if adapter and order.exchange_order_id and hasattr(adapter, 'sync_get_fills'):
+                try:
+                    # Sync fills
+                    fills = adapter.sync_get_fills(order_id=order.exchange_order_id)
+                    if fills:
+                        sig_data = db.fetch_all("SELECT * FROM signals WHERE signal_id=?", (order.signal_id,))
+                        if sig_data:
+                            signal = Signal(**sig_data[0])
+                            # In Coinbase, fields are price, size, commission, trade_id
+                            for f in fills:
+                                fill_price = float(f.get('price', order.price))
+                                fill_size = float(f.get('size', 0.0))
+                                fee = float(f.get('commission', 0.0))
+                                exec_id = str(f.get('trade_id', ''))
+                                if fill_size > 0:
+                                    self.handle_fill(order, signal, fill_price, fill_size, fee, execution_id=exec_id)
+                                    
+                    # Re-eval if handle_fill advanced status
+                    if order.status != "PENDING":
+                        continue
+
+                    if hasattr(adapter, 'sync_get_order'):
+                        remote_order = adapter.sync_get_order(order.exchange_order_id)
+                        remote_status = remote_order.get("status", "")
+                        if remote_status in ["CANCELLED", "FAILED", "EXPIRED"]:
+                            logger.warning(f"Order {order.order_id} failed on exchange ({remote_status}). Marking local as FAILED.")
+                            self.mark_order_failed(order)
+                            Journal.update_signal_status(order.signal_id, "FAILED_EXCHANGE")
+                            continue
+                            
+                except Exception as e:
+                    logger.error(f"Reconciliation error for {order.order_id}: {e}")
+
+            if order.status != "PENDING":
+                continue
                 
             # 3. Timeout checking
             if now - order.created_at >= timeout:

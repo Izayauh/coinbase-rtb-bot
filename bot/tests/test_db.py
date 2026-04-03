@@ -13,21 +13,25 @@ from models import Bar
 
 @pytest.fixture
 def temp_db():
-    test_path = "test_journal.db"
+    import uuid
+    test_path = f"test_journal_{uuid.uuid4().hex}.db"
     if os.path.exists(test_path):
-        os.remove(test_path)
+        try:
+            os.remove(test_path)
+        except OSError:
+            pass
     
-    test_db = Database(test_path)
+    global_db_module.db.db_path = test_path
+    global_db_module.db._init_db()
     
-    # Overwrite bounds
-    global_db_module.db = test_db
-    journal.db = test_db
-    
-    yield test_db
+    yield global_db_module.db
     
     # Cleanup properly cleanly defensively
     if os.path.exists(test_path):
-        os.remove(test_path)
+        try:
+            os.remove(test_path)
+        except OSError:
+            pass
 
 def test_bar_upsert_duplicates(temp_db):
     b1 = Bar("BTC-USD", "1h", 10000, 100.0, 105.0, 95.0, 102.0, 10.0)

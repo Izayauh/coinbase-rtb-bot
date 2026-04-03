@@ -9,19 +9,21 @@ from state_machine import StateMachine
 import strategy
 
 @pytest.fixture
-def temp_db(monkeypatch):
-    test_path = "test_sm_journal.db"
+def temp_db():
+    import uuid
+    test_path = f"test_sm_journal_{uuid.uuid4().hex}.db"
     if os.path.exists(test_path):
-        os.remove(test_path)
-    from db import Database
+        try:
+            os.remove(test_path)
+        except OSError:
+            pass
+            
     import db as global_db
-    import journal
-    import state_machine
-    test_db = Database(test_path)
-    monkeypatch.setattr(global_db, 'db', test_db)
-    monkeypatch.setattr(journal, 'db', test_db)
-    monkeypatch.setattr(state_machine, 'db', test_db)
-    yield test_db
+    global_db.db.db_path = test_path
+    global_db.db._init_db()
+    
+    yield global_db.db
+    
     if os.path.exists(test_path):
         try:
             os.remove(test_path)
