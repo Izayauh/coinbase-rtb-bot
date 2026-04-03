@@ -1,9 +1,14 @@
 exchange: coinbase_advanced
 portfolio_scope: trading_sleeve_v1
 
+runtime:
+  mode: paper          # paper | live  (live fails fast this phase)
+  trading_enabled: true
+  portfolio_value: 10000.0
+  paper_db_path: paper_journal.db
+
 symbols:
   - BTC-USD
-  - ETH-USD
 
 timeframes:
   signal: 1h
@@ -38,3 +43,4 @@ execution:
   max_spread_bps: 8
   reconcile_interval_sec: 5
   ws_stale_timeout_sec: 15
+  max_pending_order_age_sec: 60
