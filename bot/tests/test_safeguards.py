@@ -6,6 +6,9 @@ Tests:
   2. stale_stream guard fires when last_trade_ts is old, recovers when fresh.
   3. check_stop_invariant disables trading if position missing stop.
   4. Persisted disabled state survives restart (new Safeguards instance).
+  5. Kill switch file blocks trading while present.
+  6. check_order_size allows/rejects based on notional cap.
+  7. check_position_size disables trading when position exceeds cap.
 """
 import time
 import pytest
@@ -185,3 +188,68 @@ def test_stale_stream_recovery_blocked_when_stop_required_tripped(test_db):
     result = sg2.can_trade()
     assert result is False
     assert sg2.trading_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Test 5: Kill switch
+# ---------------------------------------------------------------------------
+
+def test_kill_switch_blocks_trading(test_db, tmp_path):
+    """can_trade() returns False when the kill switch file exists."""
+    ks_file = str(tmp_path / "KILL_SWITCH")
+    sg = _make_safeguards(kill_switch_file=ks_file)
+    assert sg.can_trade() is True  # no file yet
+
+    # Create the kill switch file
+    open(ks_file, "w").close()
+    assert sg.can_trade() is False
+    assert sg.trading_enabled is False
+
+
+def test_kill_switch_absent_allows_trading(test_db, tmp_path):
+    """can_trade() returns True when the kill switch file does not exist."""
+    ks_file = str(tmp_path / "KILL_SWITCH_ABSENT")
+    sg = _make_safeguards(kill_switch_file=ks_file)
+    assert sg.can_trade() is True
+
+
+# ---------------------------------------------------------------------------
+# Test 6: Order size cap
+# ---------------------------------------------------------------------------
+
+def test_check_order_size_allows_within_cap(test_db):
+    """check_order_size returns True when notional is within cap."""
+    sg = _make_safeguards(max_order_size_usd=10000.0)
+    # 0.1 BTC @ 50000 = 5000 USD — within cap
+    assert sg.check_order_size(0.1, 50000.0) is True
+    assert sg.trading_enabled is True  # does not disable
+
+
+def test_check_order_size_rejects_oversized(test_db):
+    """check_order_size returns False when notional exceeds cap."""
+    sg = _make_safeguards(max_order_size_usd=100.0)
+    # 0.1 BTC @ 50000 = 5000 USD — exceeds 100 USD cap
+    assert sg.check_order_size(0.1, 50000.0) is False
+    # check_order_size does NOT disable trading — caller decides
+    assert sg.trading_enabled is True
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Position size cap
+# ---------------------------------------------------------------------------
+
+def test_check_position_size_disables_when_exceeded(test_db):
+    """check_position_size disables trading when position notional exceeds cap."""
+    sg = _make_safeguards(max_position_size_usd=100.0)
+    # 0.5 BTC @ 50000 = 25000 USD — exceeds 100 USD cap
+    assert sg.check_position_size(0.5, 50000.0) is False
+    assert sg.trading_enabled is False
+    assert "position_size_exceeded" in sg._tripped
+
+
+def test_check_position_size_allows_within_cap(test_db):
+    """check_position_size returns True when position is within cap."""
+    sg = _make_safeguards(max_position_size_usd=10000.0)
+    # 0.1 BTC @ 50000 = 5000 USD — within 10000 USD cap
+    assert sg.check_position_size(0.1, 50000.0) is True
+    assert sg.trading_enabled is True

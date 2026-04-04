@@ -9,8 +9,9 @@ from .risk import RiskManager
 logger = logging.getLogger(__name__)
 
 class ExecutionService:
-    def __init__(self, portfolio_value: float = 10000.0):
+    def __init__(self, portfolio_value: float = 10000.0, safeguards=None):
         self.portfolio_value = portfolio_value
+        self._safeguards = safeguards  # optional; enables size cap checks
 
     def process_signal(self, signal: Signal) -> Optional[Order]:
         """
@@ -43,6 +44,11 @@ class ExecutionService:
 
         # Calculate max slippage bound for IOC
         limit_price = RiskManager.get_ioc_limit(entry_price)
+
+        # 4. Order size cap
+        if self._safeguards and not self._safeguards.check_order_size(size, limit_price):
+            logger.warning(f"Signal {signal.signal_id} rejected: order size cap exceeded.")
+            return self._record_rejected_order(signal, "REJECTED_SIZE_CAP")
 
         # Generate pending order intent
         order = Order(
@@ -150,6 +156,10 @@ class ExecutionService:
             )
             
         Journal.upsert_position(position.__dict__)
+
+        # Position size cap — disable trading if fill pushes position over limit
+        if self._safeguards:
+            self._safeguards.check_position_size(position.current_size, fill_price)
 
     def mark_order_failed(self, order: Order):
         order.status = "FAILED"

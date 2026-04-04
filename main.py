@@ -61,6 +61,7 @@ def _process_new_signals(exec_service: ExecutionService, safeguards: Safeguards)
             "REJECTED_POSITION_OPEN": "REJECTED_POSITION_OPEN",
             "REJECTED_INVALID_DATA": "REJECTED_INVALID_DATA",
             "REJECTED_INVALID_SIZE": "REJECTED_INVALID_SIZE",
+            "REJECTED_SIZE_CAP": "REJECTED_SIZE_CAP",
         }
         new_status = status_map.get(order.status, "PROCESSED")
         Journal.update_signal_status(signal.signal_id, new_status)
@@ -260,6 +261,21 @@ async def run() -> None:
 
     logger.info("CB-RTB starting in %s mode | symbol=%s | portfolio=%.2f", mode, sym, pv)
 
+    # Startup configuration summary
+    print("\n=== CB-RTB Startup Configuration ===")
+    print(f"  Mode:                  {mode}")
+    print(f"  Symbol:                {sym}")
+    print(f"  Portfolio value:       ${pv:,.2f}")
+    print(f"  Kill switch file:      {config.kill_switch_file()}")
+    print(f"  Product allowlist:     {config.product_allowlist()}")
+    print(f"  Max order size (USD):  ${config.max_order_size_usd():,.2f}")
+    print(f"  Max position (USD):    ${config.max_position_size_usd():,.2f}")
+    print(f"  Max daily loss:        {config.max_daily_loss() * 100:.2f}%")
+    print(f"  Reconcile interval:    {reconcile_interval}s")
+    print(f"  Max pending order age: {max_pending_age}s")
+    print(f"  WS stale timeout:      {config.ws_stale_timeout_sec()}s")
+    print("=====================================\n")
+
     # 2. Set DB path (paper uses paper_journal.db — never contaminates production data)
     paper_db = config.paper_db_path()
     db.db_path = paper_db
@@ -276,16 +292,19 @@ async def run() -> None:
     # 6. State machine (loads persisted state)
     state_machine = StateMachine()
 
-    # 7. Execution service
-    exec_service = ExecutionService(portfolio_value=pv)
-
-    # 8. Safeguards
+    # 7. Safeguards (constructed before ExecutionService so it can be wired in)
     safeguards = Safeguards(
         trading_enabled=config.trading_enabled(),
         ws_stale_timeout_sec=config.ws_stale_timeout_sec(),
         max_daily_loss_fraction=config.max_daily_loss(),
         portfolio_value=pv,
+        kill_switch_file=config.kill_switch_file(),
+        max_order_size_usd=config.max_order_size_usd(),
+        max_position_size_usd=config.max_position_size_usd(),
     )
+
+    # 8. Execution service
+    exec_service = ExecutionService(portfolio_value=pv, safeguards=safeguards)
 
     # 9. Market data processor + wire on_bar_close callback
     def on_bar_close(bar):

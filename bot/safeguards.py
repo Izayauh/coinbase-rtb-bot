@@ -15,6 +15,7 @@ Guards:
                         (not enforced here; just surfaced for config access)
 """
 import logging
+import os
 import time
 from typing import Optional
 
@@ -33,10 +34,16 @@ class Safeguards:
         ws_stale_timeout_sec: int = 15,
         max_daily_loss_fraction: float = 0.015,
         portfolio_value: float = 10000.0,
+        kill_switch_file: str = "KILL_SWITCH",
+        max_order_size_usd: float = 500.0,
+        max_position_size_usd: float = 1000.0,
     ):
         self.ws_stale_timeout_sec = ws_stale_timeout_sec
         self.max_daily_loss_fraction = max_daily_loss_fraction
         self.portfolio_value = portfolio_value
+        self.kill_switch_file = kill_switch_file
+        self.max_order_size_usd = max_order_size_usd
+        self.max_position_size_usd = max_position_size_usd
 
         # Load persisted state; config value wins if not previously overridden
         persisted = Journal.get_state(_STATE_KEY)
@@ -81,6 +88,8 @@ class Safeguards:
         comes back.
         """
         stale = self._check_stale_stream()
+        if self._check_kill_switch():
+            return False
         if not self._trading_enabled:
             return False
         if stale:
@@ -105,6 +114,37 @@ class Safeguards:
                 f"stop_active={pos.get('stop_active')} stop_price={pos.get('stop_price')}",
             )
         return ok
+
+    def check_order_size(self, size: float, price: float) -> bool:
+        """
+        Return True if the order's USD notional is within the cap.
+        Return False and log if it exceeds max_order_size_usd.
+        Does NOT disable trading — caller decides whether to reject or halt.
+        """
+        notional = size * price
+        if notional > self.max_order_size_usd:
+            logger.warning(
+                "Order size cap exceeded: %.2f USD > max %.2f USD (size=%.5f @ %.2f)",
+                notional, self.max_order_size_usd, size, price,
+            )
+            return False
+        return True
+
+    def check_position_size(self, new_total_size: float, price: float) -> bool:
+        """
+        Return True if the resulting position's USD notional is within the cap.
+        Return False and disable trading if it exceeds max_position_size_usd.
+        Called after a fill is applied to the position.
+        """
+        notional = new_total_size * price
+        if notional > self.max_position_size_usd:
+            self._disable(
+                "position_size_exceeded",
+                f"Position size cap exceeded: {notional:.2f} USD > max "
+                f"{self.max_position_size_usd:.2f} USD",
+            )
+            return False
+        return True
 
     def disable(self, reason: str) -> None:
         """External call to disable trading (e.g. from signal consumer after guard check)."""
@@ -137,6 +177,17 @@ class Safeguards:
                 self._trading_enabled = True
                 self._tripped.discard("stale_stream")
                 self._persist()
+        return False
+
+    def _check_kill_switch(self) -> bool:
+        """Returns True (blocked) if the kill switch file exists on disk."""
+        if os.path.exists(self.kill_switch_file):
+            self._disable(
+                "kill_switch",
+                f"Kill switch file '{self.kill_switch_file}' is present. "
+                "Remove the file and restart to resume trading.",
+            )
+            return True
         return False
 
     def _check_daily_loss(self) -> bool:

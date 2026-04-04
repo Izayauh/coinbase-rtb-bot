@@ -44,3 +44,24 @@ execution:
   reconcile_interval_sec: 5
   ws_stale_timeout_sec: 15
   max_pending_order_age_sec: 60
+
+safety:
+  # Hard kill switch — create a file named KILL_SWITCH in the repo root
+  # to immediately block all order placement. Checked every reconcile tick.
+  kill_switch_file: KILL_SWITCH
+
+  # Product allowlist — only symbols in this list may be traded.
+  product_allowlist:
+    - BTC-USD
+
+  # Order and position size caps (USD notional).
+  # Orders exceeding max_order_size_usd are rejected before submission.
+  # Fills that would push position above max_position_size_usd disable trading.
+  max_order_size_usd: 500.0
+  max_position_size_usd: 1000.0
+
+  # Live trading gate. Both conditions must be true to run in live mode:
+  #   1. This flag set to true in config
+  #   2. Environment variable LIVE_TRADING_CONFIRMED=true
+  # Paper mode ignores this flag entirely.
+  live_trading_confirmed: false

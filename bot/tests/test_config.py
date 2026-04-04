@@ -104,3 +104,36 @@ def test_multiple_symbols_exits(monkeypatch):
     """More than one symbol must call sys.exit(1)."""
     with pytest.raises(SystemExit):
         _run_validate({"symbols": ["BTC-USD", "ETH-USD"]})
+
+
+def test_symbol_not_in_allowlist_exits(monkeypatch):
+    """Symbol not present in product_allowlist must call sys.exit(1)."""
+    with pytest.raises(SystemExit):
+        _run_validate({
+            "symbols": ["ETH-USD"],
+            "safety": {"product_allowlist": ["BTC-USD"]},
+        })
+
+
+def test_symbol_in_allowlist_passes(monkeypatch):
+    """Symbol present in product_allowlist must pass validation."""
+    _run_validate({
+        "symbols": ["BTC-USD"],
+        "safety": {
+            "product_allowlist": ["BTC-USD"],
+            "max_order_size_usd": 500.0,
+            "max_position_size_usd": 1000.0,
+        },
+    })
+
+
+def test_zero_max_order_size_exits(monkeypatch):
+    """max_order_size_usd <= 0 must call sys.exit(1)."""
+    with pytest.raises(SystemExit):
+        _run_validate({"safety": {"max_order_size_usd": 0.0}})
+
+
+def test_zero_max_position_size_exits(monkeypatch):
+    """max_position_size_usd <= 0 must call sys.exit(1)."""
+    with pytest.raises(SystemExit):
+        _run_validate({"safety": {"max_position_size_usd": 0.0}})

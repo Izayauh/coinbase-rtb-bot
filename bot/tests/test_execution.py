@@ -3,6 +3,7 @@ from bot.models import Signal, Order
 from bot.db import db
 from bot.journal import Journal
 from bot.execution import ExecutionService
+from bot.safeguards import Safeguards
 
 
 def make_signal(signal_id="sig_test_123", symbol="BTC-USD", execution_price=50200.0):
@@ -171,3 +172,77 @@ def test_overfill_rejected(test_db):
     service.handle_fill(order, signal, fill_price=50200.0, fill_size=order.size * 1.5, execution_id="exec_overfill")
     assert order.executed_size == 0.0
     assert order.status == "PENDING"
+
+
+# ---------------------------------------------------------------------------
+# Safety rails: order size cap
+# ---------------------------------------------------------------------------
+
+def test_order_size_cap_rejects_signal(test_db):
+    """process_signal returns REJECTED_SIZE_CAP when order notional exceeds cap."""
+    signal = make_signal()
+    insert_signal(signal)
+
+    # Cap of $1 — any real order will exceed this
+    sg = Safeguards(
+        trading_enabled=True,
+        ws_stale_timeout_sec=15,
+        max_daily_loss_fraction=0.015,
+        portfolio_value=10000.0,
+        max_order_size_usd=1.0,
+        max_position_size_usd=1000.0,
+    )
+    service = ExecutionService(portfolio_value=10000.0, safeguards=sg)
+    order = service.process_signal(signal)
+
+    assert order is not None
+    assert order.status == "REJECTED_SIZE_CAP"
+    assert sg.trading_enabled is True  # rejection does not disable trading
+
+
+def test_order_size_cap_passes_when_within_limit(test_db):
+    """process_signal succeeds when notional is within cap."""
+    signal = make_signal()
+    insert_signal(signal)
+
+    sg = Safeguards(
+        trading_enabled=True,
+        ws_stale_timeout_sec=15,
+        max_daily_loss_fraction=0.015,
+        portfolio_value=10000.0,
+        max_order_size_usd=10000.0,
+        max_position_size_usd=100000.0,
+    )
+    service = ExecutionService(portfolio_value=10000.0, safeguards=sg)
+    order = service.process_signal(signal)
+
+    assert order is not None
+    assert order.status == "PENDING"
+
+
+# ---------------------------------------------------------------------------
+# Safety rails: position size cap
+# ---------------------------------------------------------------------------
+
+def test_position_size_cap_disables_trading_after_fill(test_db):
+    """handle_fill disables trading via safeguards when position exceeds cap."""
+    signal = make_signal()
+    insert_signal(signal)
+
+    # Cap of $1 — any real position will exceed this
+    sg = Safeguards(
+        trading_enabled=True,
+        ws_stale_timeout_sec=15,
+        max_daily_loss_fraction=0.015,
+        portfolio_value=10000.0,
+        max_order_size_usd=10000.0,
+        max_position_size_usd=1.0,
+    )
+    service = ExecutionService(portfolio_value=10000.0, safeguards=sg)
+    order = service.process_signal(signal)
+    assert order.status == "PENDING"
+
+    service.handle_fill(order, signal, fill_price=50200.0, fill_size=order.size)
+
+    assert sg.trading_enabled is False
+    assert "position_size_exceeded" in sg._tripped

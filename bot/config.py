@@ -69,6 +69,30 @@ def max_daily_loss() -> float:
 
 
 # ---------------------------------------------------------------------------
+# Safety accessors
+# ---------------------------------------------------------------------------
+
+def kill_switch_file() -> str:
+    return str(_raw.get("safety", {}).get("kill_switch_file", "KILL_SWITCH"))
+
+
+def product_allowlist() -> list:
+    return list(_raw.get("safety", {}).get("product_allowlist", []))
+
+
+def max_order_size_usd() -> float:
+    return float(_raw.get("safety", {}).get("max_order_size_usd", 500.0))
+
+
+def max_position_size_usd() -> float:
+    return float(_raw.get("safety", {}).get("max_position_size_usd", 1000.0))
+
+
+def live_trading_confirmed() -> bool:
+    return bool(_raw.get("safety", {}).get("live_trading_confirmed", False))
+
+
+# ---------------------------------------------------------------------------
 # Fail-fast startup validation
 # ---------------------------------------------------------------------------
 
@@ -113,6 +137,31 @@ def validate() -> None:
     mpa = _raw.get("execution", {}).get("max_pending_order_age_sec", 60)
     if int(mpa) <= 0:
         errors.append(f"max_pending_order_age_sec must be > 0. Got {mpa}")
+
+    # Product allowlist — configured symbol must be in the allowlist
+    allowlist = product_allowlist()
+    if allowlist and len(syms) == 1 and syms[0] not in allowlist:
+        errors.append(
+            f"Symbol '{syms[0]}' is not in the product allowlist: {allowlist}"
+        )
+
+    # Size caps must be positive
+    if float(_raw.get("safety", {}).get("max_order_size_usd", 500.0)) <= 0:
+        errors.append("safety.max_order_size_usd must be > 0")
+    if float(_raw.get("safety", {}).get("max_position_size_usd", 1000.0)) <= 0:
+        errors.append("safety.max_position_size_usd must be > 0")
+
+    # Live gate: if mode is live, both config flag AND env var must be set.
+    # Checked here as defence-in-depth even though live mode exits above.
+    if mode == "live":
+        if not live_trading_confirmed():
+            errors.append(
+                "Live mode requires safety.live_trading_confirmed=true in config."
+            )
+        if not os.environ.get("LIVE_TRADING_CONFIRMED", "").lower() == "true":
+            errors.append(
+                "Live mode requires environment variable LIVE_TRADING_CONFIRMED=true."
+            )
 
     if errors:
         for e in errors:
