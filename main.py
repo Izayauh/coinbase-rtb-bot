@@ -449,6 +449,35 @@ async def run() -> None:
     db._init_db()
     logger.info("%s DB: %s", mode.capitalize(), journal_db)
 
+    # 2b. Historical backfill — ensure enough bars exist for strategy evaluation.
+    #     Without backfill, reaching 205 4h bars from streaming alone takes 34+ days.
+    #     Only attempted when credentials are available (live mode or paper with creds).
+    if coinbase_adapter._enabled:
+        from bot.backfill import backfill_bars, REQUIRED_1H
+        have_1h = db.fetch_all(
+            "SELECT COUNT(*) as c FROM bars WHERE symbol=? AND timeframe='1h'",
+            (sym,),
+        )[0]["c"]
+        have_4h = db.fetch_all(
+            "SELECT COUNT(*) as c FROM bars WHERE symbol=? AND timeframe='4h'",
+            (sym,),
+        )[0]["c"]
+        if have_1h < 25 or have_4h < 205:
+            logger.info(
+                "Bars insufficient for strategy (%d/25 1h, %d/205 4h). "
+                "Running historical backfill ...",
+                have_1h, have_4h,
+            )
+            try:
+                bf_result = backfill_bars(coinbase_adapter, sym)
+                logger.info("Backfill result: %s", bf_result)
+            except Exception as exc:
+                logger.error(
+                    "Historical backfill failed: %s. Strategy will not evaluate "
+                    "until enough bars accumulate from the live stream (34+ days).",
+                    exc,
+                )
+
     # 3. Init remaining adapters
     #    Paper → PaperAdapter (synthetic fills, no real orders)
     #    Live  → CoinbaseAdapter directly (real REST calls in submit_order_intent)
@@ -458,6 +487,24 @@ async def run() -> None:
 
     # 4. Bar aggregator (warms from DB)
     aggregator = BarAggregator(sym)
+
+    # 4b. Strategy readiness diagnostic — operator must see this at every startup.
+    n1h = len(aggregator.get_bars_1h())
+    n4h = len(aggregator.get_bars_4h())
+    strat_ready = aggregator.ready()
+    print("\n=== Strategy Readiness ===")
+    print(f"  1h bars : {n1h} / 25 required")
+    print(f"  4h bars : {n4h} / 205 required")
+    if strat_ready:
+        print("  STRATEGY READY: YES")
+    else:
+        reasons = []
+        if n1h < 25:
+            reasons.append(f"need {25 - n1h} more 1h bars")
+        if n4h < 205:
+            reasons.append(f"need {205 - n4h} more 4h bars")
+        print(f"  STRATEGY READY: NO -- {', '.join(reasons)}")
+    print("==========================\n")
 
     # 5. State machine (loads persisted state)
     state_machine = StateMachine()
