@@ -56,13 +56,13 @@ def _process_new_signals(exec_service: ExecutionService, safeguards: Safeguards)
         if order is None:
             continue
 
-        status_map = {
-            "PENDING": "ORDER_PENDING",
-            "REJECTED_POSITION_OPEN": "REJECTED_POSITION_OPEN",
-            "REJECTED_INVALID_DATA": "REJECTED_INVALID_DATA",
-            "REJECTED_INVALID_SIZE": "REJECTED_INVALID_SIZE",
-            "REJECTED_SIZE_CAP": "REJECTED_SIZE_CAP",
+        _REJECTION_STATUSES = {
+            "REJECTED_POSITION_OPEN",
+            "REJECTED_INVALID_DATA",
+            "REJECTED_INVALID_SIZE",
+            "REJECTED_SIZE_CAP",
         }
+        status_map = {"PENDING": "ORDER_PENDING"} | {s: s for s in _REJECTION_STATUSES}
         new_status = status_map.get(order.status, "PROCESSED")
         Journal.update_signal_status(signal.signal_id, new_status)
 
@@ -74,6 +74,14 @@ def _process_new_signals(exec_service: ExecutionService, safeguards: Safeguards)
                 symbol=order.symbol,
                 size=order.size,
                 price=order.price,
+            )
+        elif order.status in _REJECTION_STATUSES:
+            log_event(
+                "ORDER_REJECTED",
+                order_id=order.order_id,
+                signal_id=signal.signal_id,
+                symbol=order.symbol,
+                reason=order.status,
             )
 
 
@@ -167,10 +175,12 @@ def _print_session_summary(mode: str, start_ts: float) -> None:
     print(f"Duration:              {hours}h {minutes}m")
     print(f"Signals generated:     {_count('SIGNAL_EMITTED')}")
     print(f"Orders placed:         {_count('ORDER_PENDING')}")
+    print(f"Orders rejected:       {_count('ORDER_REJECTED')}")
     print(f"Orders filled:         {_count('ORDER_FILLED')}")
     print(f"Orders failed:         {_count('ORDER_FAILED_EXCHANGE')}")
     print(f"Orders timed out:      {_count('ORDER_TIMEOUT')}")
     print(f"Positions opened:      {_count('POSITION_OPENED')}")
+    print(f"WS reconnects:         {_count('WS_RECONNECT')}")
     print(f"Trading disabled:      {_count('TRADING_DISABLED')}")
     print("=======================\n")
 
@@ -244,6 +254,36 @@ async def safeguard_task(
         await asyncio.sleep(reconcile_interval)
 
 
+async def equity_snapshot_task(
+    portfolio_value: float,
+    snapshot_interval: int = 60,
+) -> None:
+    logger.info("Equity snapshot task starting.")
+    while True:
+        await asyncio.sleep(snapshot_interval)
+        try:
+            rows = db.fetch_all(
+                "SELECT COALESCE(SUM(unrealized_pnl),0) AS up, "
+                "COALESCE(SUM(realized_pnl),0) AS rp, "
+                "COUNT(*) AS cnt FROM positions WHERE state='OPEN'"
+            )
+            unrealized = float(rows[0]["up"]) if rows else 0.0
+            realized = float(rows[0]["rp"]) if rows else 0.0
+            open_pos = int(rows[0]["cnt"]) if rows else 0
+            total = portfolio_value + realized + unrealized
+            from bot.journal import Journal as _J
+            _J.insert_equity_snapshot(portfolio_value, unrealized, realized, total, open_pos)
+            log_event(
+                "EQUITY_SNAPSHOT",
+                total_equity=round(total, 4),
+                unrealized_pnl=round(unrealized, 4),
+                realized_pnl=round(realized, 4),
+                open_positions=open_pos,
+            )
+        except Exception as exc:
+            logger.error("Equity snapshot error: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -262,11 +302,14 @@ async def run() -> None:
     logger.info("CB-RTB starting in %s mode | symbol=%s | portfolio=%.2f", mode, sym, pv)
 
     # Startup configuration summary
+    import os as _os
+    ks_file = config.kill_switch_file()
+    ks_state = "ACTIVE — trading BLOCKED" if _os.path.exists(ks_file) else "not present"
     print("\n=== CB-RTB Startup Configuration ===")
     print(f"  Mode:                  {mode}")
     print(f"  Symbol:                {sym}")
     print(f"  Portfolio value:       ${pv:,.2f}")
-    print(f"  Kill switch file:      {config.kill_switch_file()}")
+    print(f"  Kill switch file:      {ks_file}  [{ks_state}]")
     print(f"  Product allowlist:     {config.product_allowlist()}")
     print(f"  Max order size (USD):  ${config.max_order_size_usd():,.2f}")
     print(f"  Max position (USD):    ${config.max_position_size_usd():,.2f}")
@@ -316,9 +359,16 @@ async def run() -> None:
     md_processor = MarketDataProcessor(coinbase_adapter, on_bar_close_callback=on_bar_close)
     safeguards.set_md_processor(md_processor)
 
-    # 10. Connect WebSocket
+    # 10. Connect WebSocket + wire reconnect event
+    def _on_ws_reconnect(count: int) -> None:
+        if count > 1:
+            log_event("WS_RECONNECT", count=count, symbol=sym)
+
+    coinbase_adapter.set_reconnect_callback(_on_ws_reconnect)
     coinbase_adapter.ws_connect([sym])
     logger.info("WebSocket connecting for %s ...", sym)
+
+    log_event("PROCESS_START", mode=mode, symbol=sym, portfolio_value=pv)
 
     # Launch tasks
     tasks = [
@@ -330,6 +380,7 @@ async def run() -> None:
             )
         ),
         asyncio.create_task(safeguard_task(safeguards, reconcile_interval)),
+        asyncio.create_task(equity_snapshot_task(pv)),
     ]
 
     try:
@@ -341,6 +392,7 @@ async def run() -> None:
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        log_event("PROCESS_STOP", mode=mode, symbol=sym)
         _print_session_summary(mode, start_ts)
 
 

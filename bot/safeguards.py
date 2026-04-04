@@ -17,6 +17,7 @@ Guards:
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from .journal import Journal
@@ -25,6 +26,13 @@ logger = logging.getLogger(__name__)
 
 # Key for persistence in runtime_state table
 _STATE_KEY = "safeguards"
+
+
+def _start_of_day_ts() -> int:
+    """Return UTC midnight timestamp for today as a Unix integer."""
+    now = datetime.now(timezone.utc)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(midnight.timestamp())
 
 
 class Safeguards:
@@ -192,9 +200,27 @@ class Safeguards:
 
     def _check_daily_loss(self) -> bool:
         """
-        Structural daily-loss guard. Not economically meaningful yet because
-        there is no exit logic or mark-to-market. Returns False in this phase.
+        Trip if today's equity drawdown from the first snapshot exceeds
+        max_daily_loss_fraction of portfolio_value.
+
+        Requires at least two equity snapshots today to be meaningful.
+        Returns False (does not trip) if insufficient data.
         """
+        today_start = _start_of_day_ts()
+        snapshots = Journal.get_equity_snapshots_since(today_start)
+        if len(snapshots) < 2:
+            return False
+        peak = snapshots[0]["total_equity"]
+        current = snapshots[-1]["total_equity"]
+        loss = peak - current
+        threshold = self.portfolio_value * self.max_daily_loss_fraction
+        if loss >= threshold:
+            self._disable(
+                "daily_loss",
+                f"Daily equity drawdown ${loss:.2f} >= threshold ${threshold:.2f} "
+                f"(peak=${peak:.2f} current=${current:.2f})",
+            )
+            return True
         return False
 
     def _disable(self, guard_name: str, message: str) -> None:

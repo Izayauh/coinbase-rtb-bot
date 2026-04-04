@@ -29,6 +29,8 @@ class CoinbaseAdapter:
         self._ws_running = False
         self.market_queue = asyncio.Queue()
         self.user_queue = asyncio.Queue()
+        self._reconnect_count = 0
+        self._on_reconnect = None  # optional callback: fn(count) called on each reconnect
 
     def set_loop(self, loop):
         pass # Queues natively managed
@@ -131,14 +133,27 @@ class CoinbaseAdapter:
             msg["jwt"] = jwt_token
         return json.dumps(msg)
 
+    def set_reconnect_callback(self, fn) -> None:
+        """Set a callback invoked on every WebSocket (re)connect. Signature: fn(count: int)."""
+        self._on_reconnect = fn
+
     async def ws_loop(self, product_ids: List[str]):
         self._ws_running = True
         subscription_time = 0
-        
+
         while self._ws_running:
             try:
                 async with websockets.connect(self.WS_URL) as ws:
-                    logger.info("Direct Advanced WS connected.")
+                    self._reconnect_count += 1
+                    if self._reconnect_count == 1:
+                        logger.info("Direct Advanced WS connected.")
+                    else:
+                        logger.info("Direct Advanced WS reconnected (count=%d).", self._reconnect_count)
+                    if self._on_reconnect:
+                        try:
+                            self._on_reconnect(self._reconnect_count)
+                        except Exception:
+                            pass
                     
                     # 5 Second structural subscription mandatory limitation
                     await ws.send(await self._ws_payload("market_trades", product_ids))

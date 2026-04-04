@@ -133,6 +133,29 @@ class Journal:
         ))
 
     @staticmethod
+    def insert_equity_snapshot(
+        portfolio_value: float,
+        unrealized_pnl: float,
+        realized_pnl: float,
+        total_equity: float,
+        open_positions: int,
+    ):
+        db.execute(
+            "INSERT INTO equity_snapshots "
+            "(ts, portfolio_value, unrealized_pnl, realized_pnl, total_equity, open_positions) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (int(time.time()), portfolio_value, unrealized_pnl, realized_pnl, total_equity, open_positions),
+        )
+
+    @staticmethod
+    def get_equity_snapshots_since(since_ts: int) -> List[dict]:
+        rows = db.fetch_all(
+            "SELECT * FROM equity_snapshots WHERE ts >= ? ORDER BY ts ASC",
+            (since_ts,),
+        )
+        return [dict(r) for r in rows]
+
+    @staticmethod
     def upsert_position(position_data: dict):
         query = """
             INSERT INTO positions (symbol, entry_ts, avg_entry, current_size, realized_pnl, unrealized_pnl, stop_price, state, stop_active)

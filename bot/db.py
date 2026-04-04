@@ -86,6 +86,16 @@ class Database:
             state TEXT,
             stop_active INTEGER
         );
+
+        CREATE TABLE IF NOT EXISTS equity_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            portfolio_value REAL,
+            unrealized_pnl REAL,
+            realized_pnl REAL,
+            total_equity REAL,
+            open_positions INTEGER
+        );
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
