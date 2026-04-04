@@ -67,6 +67,33 @@ class Safeguards:
         else:
             self._tripped: set = set()
 
+        # Auto-clear stale kill_switch guard if the file no longer exists.
+        #
+        # kill_switch is the ONLY guard that is cleared by explicit operator
+        # action (deleting the file). When the file is gone, the operator has
+        # already signalled intent to re-arm — keeping the stale persisted state
+        # would silently block trading while the banner says "kill switch not
+        # present", which is actively misleading and more dangerous than clearing.
+        #
+        # Non-recoverable guards (stop_required, daily_loss, position_size_exceeded)
+        # are NOT auto-cleared here; they require explicit operator investigation.
+        if "kill_switch" in self._tripped and not os.path.exists(kill_switch_file):
+            remaining = self._tripped - {"kill_switch"}
+            logger.warning(
+                "Safeguards: stale 'kill_switch' guard cleared — "
+                "file '%s' no longer exists. Remaining tripped guards: %s",
+                kill_switch_file,
+                remaining or "none",
+            )
+            self._tripped.discard("kill_switch")
+            if not self._tripped:
+                self._trading_enabled = True
+                logger.info(
+                    "Safeguards: all guards cleared after stale kill_switch removal — "
+                    "trading re-enabled."
+                )
+            self._persist()
+
         if not self._trading_enabled:
             logger.warning(
                 "Safeguards: trading_enabled=False loaded from persisted state. "

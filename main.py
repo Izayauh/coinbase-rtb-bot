@@ -9,6 +9,7 @@ src/ is not imported. bot/main.py has been deleted.
 """
 import asyncio
 import logging
+import sys
 import time
 
 import bot.config as config
@@ -23,6 +24,7 @@ from bot.safeguards import Safeguards
 from bot.journal import Journal
 from bot.models import Signal, Order
 from bot.events import log_event
+from bot.readiness import parse_coinbase_balances
 
 logging.basicConfig(
     level=logging.INFO,
@@ -285,6 +287,59 @@ async def equity_snapshot_task(
 
 
 # ---------------------------------------------------------------------------
+# Live mode startup helpers
+# ---------------------------------------------------------------------------
+
+def _abort_if_live_creds_missing(adapter: CoinbaseAdapter) -> None:
+    """
+    Fail fast if the adapter has no credentials.
+
+    Called once at live startup before any operations. When _enabled=False the
+    adapter silently returns synthetic fills — allowing the bot to run in live
+    mode with fake orders. That is unacceptable; we abort immediately instead.
+    """
+    if not adapter._enabled:
+        logger.error(
+            "LIVE MODE ABORTED: COINBASE_API_KEY and/or COINBASE_API_SECRET "
+            "are not set. Set both as persistent User environment variables "
+            "(see start-live.ps1 for the correct workflow)."
+        )
+        sys.exit(1)
+
+
+async def _fetch_live_balances_for_banner(adapter: CoinbaseAdapter) -> dict:
+    """
+    Fetch real Coinbase account balances to display in the startup banner.
+
+    Exits the process on auth failure — we must not proceed to live trading
+    if the credentials do not authenticate successfully against the exchange.
+
+    Returns {currency: available_float} on success.
+    """
+    try:
+        response = await adapter.get_balances()
+        balances = parse_coinbase_balances(response)
+        if balances:
+            logger.info(
+                "Live account fetch OK: %d currencies found.",
+                len(balances),
+            )
+        else:
+            logger.warning(
+                "Live account fetch returned no accounts. "
+                "Credentials may be valid but portfolio scope may be empty."
+            )
+        return balances
+    except Exception as exc:
+        logger.error(
+            "LIVE MODE ABORTED: Coinbase account fetch failed — %s. "
+            "Verify COINBASE_API_KEY and COINBASE_API_SECRET are correct.",
+            exc,
+        )
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Live mode banner
 # ---------------------------------------------------------------------------
 
@@ -295,17 +350,35 @@ def _print_live_banner(
     ks_file: str,
     ks_state: str,
     allowlist: list,
+    live_balances: dict = None,
 ) -> None:
-    w = 62
+    w = 66
     border = "!" * w
     print(f"\n{border}")
     print("!" + " *** LIVE TRADING MODE — REAL MONEY AT RISK ***".center(w - 2) + "!")
     print("!" + "".center(w - 2) + "!")
-    print("!" + f"  Symbol          : {sym}".ljust(w - 2) + "!")
-    print("!" + f"  Portfolio       : ${pv:,.2f}".ljust(w - 2) + "!")
-    print("!" + f"  Test notional   : ${live_notional:.2f} per order (0 = risk sizing)".ljust(w - 2) + "!")
-    print("!" + f"  Product allow.  : {allowlist}".ljust(w - 2) + "!")
-    print("!" + f"  Kill switch     : {ks_file}  [{ks_state}]".ljust(w - 2) + "!")
+    print("!" + f"  Symbol               : {sym}".ljust(w - 2) + "!")
+    print("!" + f"  Portfolio (config)   : ${pv:,.2f}  <- configured, NOT live balance".ljust(w - 2) + "!")
+    print("!" + f"  Test notional        : ${live_notional:.2f}/order (0 = risk sizing)".ljust(w - 2) + "!")
+    print("!" + f"  Product allowlist    : {allowlist}".ljust(w - 2) + "!")
+    print("!" + f"  Kill switch          : {ks_file}  [{ks_state}]".ljust(w - 2) + "!")
+    print("!" + "".center(w - 2) + "!")
+    if live_balances:
+        print("!" + "  === Live Coinbase Account (fetched this startup) ===".ljust(w - 2) + "!")
+        base_currency = sym.split("-")[0] if "-" in sym else sym
+        priority = {"USD", "USDC", base_currency}
+        shown = set()
+        for currency in sorted(priority):
+            if currency in live_balances:
+                line = f"  {currency:<8}: {live_balances[currency]:>18,.8f}"
+                print("!" + line.ljust(w - 2) + "!")
+                shown.add(currency)
+        for currency, value in sorted(live_balances.items()):
+            if currency not in shown and value > 0:
+                line = f"  {currency:<8}: {value:>18,.8f}"
+                print("!" + line.ljust(w - 2) + "!")
+    else:
+        print("!" + "  WARNING: Could not fetch live Coinbase account balance.".ljust(w - 2) + "!")
     print("!" + "".center(w - 2) + "!")
     print("!" + "  Press Ctrl+C within 5 seconds to ABORT.".center(w - 2) + "!")
     print(f"{border}\n")
@@ -332,9 +405,24 @@ async def run() -> None:
 
     logger.info("CB-RTB starting in %s mode | symbol=%s | portfolio=%.2f", mode, sym, pv)
 
+    # 1b. Create the Coinbase adapter early — needed for live credential checks
+    #     before any other component is initialised.
+    coinbase_adapter = CoinbaseAdapter()
+
     # Startup summary — live mode screams; paper mode is quiet
     if mode == "live":
-        _print_live_banner(sym, pv, live_notional, ks_file, ks_state, config.product_allowlist())
+        # Hard fail if credentials are absent. Without them, CoinbaseAdapter
+        # silently returns synthetic fills while in live mode — unacceptable.
+        _abort_if_live_creds_missing(coinbase_adapter)
+
+        # Prove credentials by fetching real account info. Exits on auth failure.
+        # Displayed in banner to distinguish configured value from live balance.
+        live_balances = await _fetch_live_balances_for_banner(coinbase_adapter)
+
+        _print_live_banner(
+            sym, pv, live_notional, ks_file, ks_state,
+            config.product_allowlist(), live_balances,
+        )
         # 5-second abort window — operator last chance before real orders are possible
         for i in range(5, 0, -1):
             print(f"  Starting in {i}s ...  (Ctrl+C to abort)", end="\r", flush=True)
@@ -361,10 +449,10 @@ async def run() -> None:
     db._init_db()
     logger.info("%s DB: %s", mode.capitalize(), journal_db)
 
-    # 3. Init adapters
+    # 3. Init remaining adapters
     #    Paper → PaperAdapter (synthetic fills, no real orders)
     #    Live  → CoinbaseAdapter directly (real REST calls in submit_order_intent)
-    coinbase_adapter = CoinbaseAdapter()
+    #    coinbase_adapter was already created above for the live startup checks.
     paper_adapter = PaperAdapter()
     order_adapter = coinbase_adapter if mode == "live" else paper_adapter
 

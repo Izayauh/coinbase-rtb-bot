@@ -2,7 +2,7 @@ exchange: coinbase_advanced
 portfolio_scope: trading_sleeve_v1
 
 runtime:
-  mode: paper          # paper | live  (live fails fast this phase)
+  mode: live          # paper | live  (live fails fast this phase)
   trading_enabled: true
   portfolio_value: 10000.0
   paper_db_path: paper_journal.db
@@ -65,7 +65,7 @@ safety:
   #   1. This flag set to true in config
   #   2. Environment variable LIVE_TRADING_CONFIRMED=true
   # Paper mode ignores this flag entirely.
-  live_trading_confirmed: false
+  live_trading_confirmed: true
 
 # Live-mode order settings.
 # Ignored entirely in paper mode.

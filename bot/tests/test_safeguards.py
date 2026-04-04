@@ -9,7 +9,9 @@ Tests:
   5. Kill switch file blocks trading while present.
   6. check_order_size allows/rejects based on notional cap.
   7. check_position_size disables trading when position exceeds cap.
+  8. Stale kill_switch guard auto-cleared on init when file no longer exists.
 """
+import os
 import time
 import pytest
 
@@ -253,3 +255,63 @@ def test_check_position_size_allows_within_cap(test_db):
     # 0.1 BTC @ 50000 = 5000 USD — within 10000 USD cap
     assert sg.check_position_size(0.1, 50000.0) is True
     assert sg.trading_enabled is True
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Stale kill_switch auto-cleared on restart when file is gone
+# ---------------------------------------------------------------------------
+
+def test_stale_kill_switch_auto_cleared_on_init(test_db, tmp_path):
+    """
+    If kill_switch was persisted as tripped but the file no longer exists,
+    a new Safeguards instance must auto-clear it and re-enable trading.
+
+    This fixes the mismatch where the banner says 'kill switch not present'
+    but the bot silently cannot trade due to stale persisted state.
+    """
+    ks_file = str(tmp_path / "KILL_SWITCH")
+
+    # Session 1: trip kill_switch via file presence
+    sg1 = _make_safeguards(kill_switch_file=ks_file)
+    open(ks_file, "w").close()
+    sg1.can_trade()  # trips kill_switch, persists state
+    assert sg1.trading_enabled is False
+    assert "kill_switch" in sg1._tripped
+
+    # Operator removes the kill switch file
+    os.unlink(ks_file)
+
+    # Session 2 (restart): new instance must auto-clear stale kill_switch
+    sg2 = _make_safeguards(kill_switch_file=ks_file)
+    assert sg2.trading_enabled is True, (
+        "Expected trading re-enabled after stale kill_switch cleared on init"
+    )
+    assert "kill_switch" not in sg2._tripped
+
+
+def test_stale_kill_switch_cleared_but_other_guard_keeps_trading_disabled(test_db, tmp_path):
+    """
+    When kill_switch + stop_required are both tripped and the kill_switch file
+    is removed, kill_switch is cleared on restart but trading stays disabled
+    because stop_required is a non-recoverable guard.
+    """
+    ks_file = str(tmp_path / "KILL_SWITCH")
+    open(ks_file, "w").close()
+
+    sg1 = _make_safeguards(kill_switch_file=ks_file)
+    sg1.can_trade()         # trips kill_switch
+    sg1.disable("stop_required")  # also trip stop_required
+    assert sg1.trading_enabled is False
+    assert "kill_switch" in sg1._tripped
+    assert "stop_required" in sg1._tripped
+
+    # Operator removes the kill switch file
+    os.unlink(ks_file)
+
+    # Restart: kill_switch cleared, stop_required must keep trading disabled
+    sg2 = _make_safeguards(kill_switch_file=ks_file)
+    assert sg2.trading_enabled is False, (
+        "stop_required should keep trading disabled even after kill_switch clears"
+    )
+    assert "kill_switch" not in sg2._tripped, "kill_switch should be auto-cleared"
+    assert "stop_required" in sg2._tripped, "stop_required must persist"
