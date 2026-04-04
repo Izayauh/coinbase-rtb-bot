@@ -203,14 +203,28 @@ class CoinbaseAdapter:
 
     # --- Thin Advanced WebSocket Loop ---
 
-    async def _ws_payload(self, channel: str, product_ids: List[str]):
+    def _build_jwt(self) -> str:
+        """
+        Build a WebSocket JWT from the configured credentials.
+        Raises ValueError with a clear message if the key cannot be parsed.
+        The most common cause is a malformed PEM (newlines stripped to literal \\n).
+        """
+        try:
+            return jwt_generator.build_ws_jwt(self.api_key, self.api_secret)
+        except Exception as e:
+            raise ValueError(
+                f"Failed to build JWT from COINBASE_API_SECRET — key may be malformed. "
+                f"Ensure the PEM has real newlines, not literal \\n. "
+                f"Original error: {e}"
+            ) from e
+
+    async def _ws_payload(self, channel: str, product_ids: List[str], jwt_token: str = ""):
         msg = {
             "type": "subscribe",
             "product_ids": product_ids,
             "channel": channel
         }
-        if self._enabled:
-            jwt_token = jwt_generator.build_ws_jwt(self.api_key, self.api_secret)
+        if jwt_token:
             msg["jwt"] = jwt_token
         return json.dumps(msg)
 
@@ -221,8 +235,25 @@ class CoinbaseAdapter:
     async def ws_loop(self, product_ids: List[str]):
         self._ws_running = True
         subscription_time = 0
+        _auth_backoff = 30  # seconds to wait after a JWT/auth error before retrying
 
         while self._ws_running:
+            # Build JWT once per connect cycle.
+            # If it fails the WS can still run public channels (market data works
+            # without credentials); authenticated user channel will be skipped.
+            jwt_token = ""
+            if self._enabled:
+                try:
+                    jwt_token = self._build_jwt()
+                except ValueError as auth_err:
+                    logger.error(
+                        "JWT build failed — running public channels only. "
+                        "Fix COINBASE_API_SECRET then restart. Detail: %s", auth_err
+                    )
+                    # Back off before retrying to avoid hammering on a bad key
+                    await asyncio.sleep(_auth_backoff)
+                    continue
+
             try:
                 async with websockets.connect(self.WS_URL) as ws:
                     self._reconnect_count += 1
@@ -235,34 +266,35 @@ class CoinbaseAdapter:
                             self._on_reconnect(self._reconnect_count)
                         except Exception:
                             pass
-                    
-                    # 5 Second structural subscription mandatory limitation
+
+                    # Public channels — always subscribed
                     await ws.send(await self._ws_payload("market_trades", product_ids))
                     await ws.send(await self._ws_payload("heartbeats", product_ids))
-                    if self._enabled:
-                        await ws.send(await self._ws_payload("user", product_ids))
-                    
+                    # Authenticated user channel — only when JWT is available
+                    if jwt_token:
+                        await ws.send(await self._ws_payload("user", product_ids, jwt_token))
+
                     subscription_time = time.time()
-                    
+
                     async for msg in ws:
-                        if not self._ws_running: break
-                        
-                        # Monitor 2 minute strict JWT limitation logically
+                        if not self._ws_running:
+                            break
+
+                        # Renew JWT at 115s to stay inside the 2-minute limit
                         if time.time() - subscription_time > 115:
-                            # Reconnecting physically forces clean internal Auth limits effectively.
                             logger.info("Renewing JWT explicit socket binding.")
-                            break 
-                            
+                            break
+
                         data = json.loads(msg)
                         channel = data.get("channel")
-                        
+
                         if channel in ["market_trades", "heartbeats"]:
                             await self.market_queue.put(data)
                         elif channel == "user":
                             await self.user_queue.put(data)
-                            
+
             except Exception as e:
-                logger.error(f"WS Exception dynamically isolating: {e}")
+                logger.error("WS Exception: %s", e)
                 await asyncio.sleep(5)
 
     def ws_connect(self, product_ids: List[str]):

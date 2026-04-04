@@ -119,11 +119,6 @@ def validate() -> None:
             errors.append(
                 f"Invalid runtime mode: '{mode}'. Must be 'paper' or 'live'."
             )
-        elif mode == "live":
-            errors.append(
-                "Live mode is not implemented in this phase. "
-                "Set runtime.mode to 'paper'."
-            )
 
     # Single symbol
     syms = symbols()

@@ -58,8 +58,9 @@ def test_valid_paper_config_passes(monkeypatch):
     _run_validate({})  # no overrides — base is valid
 
 
-def test_live_mode_exits(monkeypatch):
-    """Setting mode=live must call sys.exit(1)."""
+def test_live_mode_exits_without_gate(monkeypatch):
+    """Live mode without the safety gate flags must call sys.exit(1)."""
+    monkeypatch.delenv("LIVE_TRADING_CONFIRMED", raising=False)
     with pytest.raises(SystemExit):
         _run_validate({"runtime": {"mode": "live"}})
 
