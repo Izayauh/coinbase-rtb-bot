@@ -285,10 +285,38 @@ async def equity_snapshot_task(
 
 
 # ---------------------------------------------------------------------------
+# Live mode banner
+# ---------------------------------------------------------------------------
+
+def _print_live_banner(
+    sym: str,
+    pv: float,
+    live_notional: float,
+    ks_file: str,
+    ks_state: str,
+    allowlist: list,
+) -> None:
+    w = 62
+    border = "!" * w
+    print(f"\n{border}")
+    print("!" + " *** LIVE TRADING MODE — REAL MONEY AT RISK ***".center(w - 2) + "!")
+    print("!" + "".center(w - 2) + "!")
+    print("!" + f"  Symbol          : {sym}".ljust(w - 2) + "!")
+    print("!" + f"  Portfolio       : ${pv:,.2f}".ljust(w - 2) + "!")
+    print("!" + f"  Test notional   : ${live_notional:.2f} per order (0 = risk sizing)".ljust(w - 2) + "!")
+    print("!" + f"  Product allow.  : {allowlist}".ljust(w - 2) + "!")
+    print("!" + f"  Kill switch     : {ks_file}  [{ks_state}]".ljust(w - 2) + "!")
+    print("!" + "".center(w - 2) + "!")
+    print("!" + "  Press Ctrl+C within 5 seconds to ABORT.".center(w - 2) + "!")
+    print(f"{border}\n")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 async def run() -> None:
+    import os as _os
     start_ts = time.time()
 
     # 1. Validate config — exits on any invalid condition
@@ -298,58 +326,73 @@ async def run() -> None:
     pv = config.portfolio_value()
     reconcile_interval = config.reconcile_interval_sec()
     max_pending_age = config.max_pending_order_age_sec()
+    live_notional = config.live_test_order_notional_usd()
+    ks_file = config.kill_switch_file()
+    ks_state = "ACTIVE — trading BLOCKED" if _os.path.exists(ks_file) else "not present"
 
     logger.info("CB-RTB starting in %s mode | symbol=%s | portfolio=%.2f", mode, sym, pv)
 
-    # Startup configuration summary
-    import os as _os
-    ks_file = config.kill_switch_file()
-    ks_state = "ACTIVE — trading BLOCKED" if _os.path.exists(ks_file) else "not present"
-    print("\n=== CB-RTB Startup Configuration ===")
-    print(f"  Mode:                  {mode}")
-    print(f"  Symbol:                {sym}")
-    print(f"  Portfolio value:       ${pv:,.2f}")
-    print(f"  Kill switch file:      {ks_file}  [{ks_state}]")
-    print(f"  Product allowlist:     {config.product_allowlist()}")
-    print(f"  Max order size (USD):  ${config.max_order_size_usd():,.2f}")
-    print(f"  Max position (USD):    ${config.max_position_size_usd():,.2f}")
-    print(f"  Max daily loss:        {config.max_daily_loss() * 100:.2f}%")
-    print(f"  Reconcile interval:    {reconcile_interval}s")
-    print(f"  Max pending order age: {max_pending_age}s")
-    print(f"  WS stale timeout:      {config.ws_stale_timeout_sec()}s")
-    print("=====================================\n")
+    # Startup summary — live mode screams; paper mode is quiet
+    if mode == "live":
+        _print_live_banner(sym, pv, live_notional, ks_file, ks_state, config.product_allowlist())
+        # 5-second abort window — operator last chance before real orders are possible
+        for i in range(5, 0, -1):
+            print(f"  Starting in {i}s ...  (Ctrl+C to abort)", end="\r", flush=True)
+            await asyncio.sleep(1)
+        print()
+    else:
+        print("\n=== CB-RTB Startup Configuration ===")
+        print(f"  Mode:                  {mode}")
+        print(f"  Symbol:                {sym}")
+        print(f"  Portfolio value:       ${pv:,.2f}")
+        print(f"  Kill switch file:      {ks_file}  [{ks_state}]")
+        print(f"  Product allowlist:     {config.product_allowlist()}")
+        print(f"  Max order size (USD):  ${config.max_order_size_usd():,.2f}")
+        print(f"  Max position (USD):    ${config.max_position_size_usd():,.2f}")
+        print(f"  Max daily loss:        {config.max_daily_loss() * 100:.2f}%")
+        print(f"  Reconcile interval:    {reconcile_interval}s")
+        print(f"  Max pending order age: {max_pending_age}s")
+        print(f"  WS stale timeout:      {config.ws_stale_timeout_sec()}s")
+        print("=====================================\n")
 
-    # 2. Set DB path (paper uses paper_journal.db — never contaminates production data)
-    paper_db = config.paper_db_path()
-    db.db_path = paper_db
+    # 2. DB — paper and live use separate files; live data never mixes with paper data
+    journal_db = config.live_db_path() if mode == "live" else config.paper_db_path()
+    db.db_path = journal_db
     db._init_db()
-    logger.info("Paper DB: %s", paper_db)
+    logger.info("%s DB: %s", mode.capitalize(), journal_db)
 
-    # 3 & 4. Init adapters
+    # 3. Init adapters
+    #    Paper → PaperAdapter (synthetic fills, no real orders)
+    #    Live  → CoinbaseAdapter directly (real REST calls in submit_order_intent)
     coinbase_adapter = CoinbaseAdapter()
     paper_adapter = PaperAdapter()
+    order_adapter = coinbase_adapter if mode == "live" else paper_adapter
 
-    # 5. Bar aggregator (warms from DB)
+    # 4. Bar aggregator (warms from DB)
     aggregator = BarAggregator(sym)
 
-    # 6. State machine (loads persisted state)
+    # 5. State machine (loads persisted state)
     state_machine = StateMachine()
 
-    # 7. Safeguards (constructed before ExecutionService so it can be wired in)
+    # 6. Safeguards (constructed before ExecutionService so it can be wired in)
     safeguards = Safeguards(
         trading_enabled=config.trading_enabled(),
         ws_stale_timeout_sec=config.ws_stale_timeout_sec(),
         max_daily_loss_fraction=config.max_daily_loss(),
         portfolio_value=pv,
-        kill_switch_file=config.kill_switch_file(),
+        kill_switch_file=ks_file,
         max_order_size_usd=config.max_order_size_usd(),
         max_position_size_usd=config.max_position_size_usd(),
     )
 
-    # 8. Execution service
-    exec_service = ExecutionService(portfolio_value=pv, safeguards=safeguards)
+    # 7. Execution service
+    exec_service = ExecutionService(
+        portfolio_value=pv,
+        safeguards=safeguards,
+        live_test_notional_usd=live_notional if mode == "live" else 0.0,
+    )
 
-    # 9. Market data processor + wire on_bar_close callback
+    # 8. Market data processor + wire on_bar_close callback
     def on_bar_close(bar):
         Journal.upsert_bar(bar)
         aggregator.add(bar)
@@ -359,7 +402,7 @@ async def run() -> None:
     md_processor = MarketDataProcessor(coinbase_adapter, on_bar_close_callback=on_bar_close)
     safeguards.set_md_processor(md_processor)
 
-    # 10. Connect WebSocket + wire reconnect event
+    # 9. Connect WebSocket + wire reconnect event
     def _on_ws_reconnect(count: int) -> None:
         if count > 1:
             log_event("WS_RECONNECT", count=count, symbol=sym)
@@ -368,14 +411,20 @@ async def run() -> None:
     coinbase_adapter.ws_connect([sym])
     logger.info("WebSocket connecting for %s ...", sym)
 
-    log_event("PROCESS_START", mode=mode, symbol=sym, portfolio_value=pv)
+    log_event(
+        "PROCESS_START",
+        mode=mode,
+        symbol=sym,
+        portfolio_value=pv,
+        live_notional=live_notional if mode == "live" else None,
+    )
 
     # Launch tasks
     tasks = [
         asyncio.create_task(market_data_task(md_processor)),
         asyncio.create_task(
             signal_consumer_task(
-                exec_service, paper_adapter, safeguards, sym,
+                exec_service, order_adapter, safeguards, sym,
                 reconcile_interval, max_pending_age,
             )
         ),

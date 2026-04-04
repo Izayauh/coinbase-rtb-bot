@@ -10,6 +10,38 @@ from coinbase import jwt_generator
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_order_id(response) -> str:
+    """
+    Pull the exchange order ID out of a Coinbase create_order response.
+    Handles the three formats the SDK may return depending on version:
+      1. Object with .success / .success_response.order_id
+      2. Plain dict with 'success_response.order_id' or 'order_id'
+      3. Object with a direct .order_id attribute
+    Returns an empty string if the order was rejected or the ID cannot be found.
+    """
+    # Format 1: SDK response object
+    if hasattr(response, "success"):
+        if not response.success:
+            err = getattr(response, "error_response", "unknown error")
+            logger.error("Exchange rejected order: %s", err)
+            return ""
+        sr = getattr(response, "success_response", None)
+        if sr is not None:
+            return str(getattr(sr, "order_id", "") or "")
+
+    # Format 2: dict
+    if isinstance(response, dict):
+        if not response.get("success", True):
+            logger.error("Exchange rejected order: %s", response.get("error_response"))
+            return ""
+        sr = response.get("success_response", {})
+        return str(sr.get("order_id", "") or response.get("order_id", ""))
+
+    # Format 3: object with direct order_id attribute
+    return str(getattr(response, "order_id", "") or "")
+
+
 class CoinbaseAdapter:
     WS_URL = "wss://advanced-trade-ws.coinbase.com"
 
@@ -110,14 +142,63 @@ class CoinbaseAdapter:
 
     def submit_order_intent(self, order) -> dict:
         """
-        Thin local abstraction boundary mapping an internal Order intent 
-        into an explicitly formatted exchange response without directly firing
-        live payloads yet (paper mode focus).
+        Submit an order intent to the exchange.
+
+        Paper / disconnected mode (_enabled=False):
+            Returns synthetic metadata — no real order sent.
+
+        Live mode (_enabled=True):
+            Submits a real limit-IOC order via the Coinbase Advanced Trade REST API.
+            Kill switch is verified immediately before the API call as a final
+            defense-in-depth check (can_trade() is the primary gate upstream).
         """
+        if not self._enabled:
+            # Paper / disconnected — synthetic response, no real money at risk.
+            return {
+                "exchange_order_id": f"cb_{order.order_id}",
+                "submitted_at": int(time.time()),
+                "status": "OPEN",
+            }
+
+        # --- Live path ---
+        # Defense-in-depth kill switch check immediately before API call.
+        import os
+        from . import config as _cfg
+        ks_file = _cfg.kill_switch_file()
+        if os.path.exists(ks_file):
+            raise RuntimeError(
+                f"Kill switch '{ks_file}' is active — refusing to submit live order "
+                f"{order.order_id}. Remove the file to resume."
+            )
+
+        response = self.rest.create_order(
+            client_order_id=order.order_id,
+            product_id=order.symbol,
+            side=order.side,
+            order_configuration={
+                "limit_limit_ioc": {
+                    "base_size": str(round(order.size, 8)),
+                    "limit_price": str(round(order.price, 2)),
+                }
+            },
+        )
+
+        # Parse exchange order ID — handle multiple SDK response formats.
+        exch_id = _extract_order_id(response)
+        if not exch_id:
+            raise ValueError(
+                f"Exchange returned no order_id for {order.order_id}. "
+                f"Response: {response}"
+            )
+
+        logger.info(
+            "Live order submitted: local=%s  exchange=%s  size=%s  limit=%s",
+            order.order_id, exch_id, order.size, order.price,
+        )
         return {
-            "exchange_order_id": f"cb_{order.order_id}",
+            "exchange_order_id": exch_id,
             "submitted_at": int(time.time()),
-            "status": "OPEN"
+            "status": "OPEN",
         }
 
     # --- Thin Advanced WebSocket Loop ---

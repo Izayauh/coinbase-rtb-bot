@@ -43,6 +43,10 @@ def paper_db_path() -> str:
     return str(_raw.get("runtime", {}).get("paper_db_path", "paper_journal.db"))
 
 
+def live_db_path() -> str:
+    return str(_raw.get("runtime", {}).get("live_db_path", "live_journal.db"))
+
+
 def symbols() -> list:
     return list(_raw.get("symbols", []))
 
@@ -90,6 +94,11 @@ def max_position_size_usd() -> float:
 
 def live_trading_confirmed() -> bool:
     return bool(_raw.get("safety", {}).get("live_trading_confirmed", False))
+
+
+def live_test_order_notional_usd() -> float:
+    """Fixed USD notional override for first live order. 0.0 = use normal risk sizing."""
+    return float(_raw.get("live", {}).get("test_order_notional_usd", 0.0))
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +170,16 @@ def validate() -> None:
         if not os.environ.get("LIVE_TRADING_CONFIRMED", "").lower() == "true":
             errors.append(
                 "Live mode requires environment variable LIVE_TRADING_CONFIRMED=true."
+            )
+        # live.test_order_notional_usd must be positive when set
+        notional = float(_raw.get("live", {}).get("test_order_notional_usd", 0.0))
+        if notional < 0:
+            errors.append("live.test_order_notional_usd must be >= 0.")
+        max_order = float(_raw.get("safety", {}).get("max_order_size_usd", 500.0))
+        if 0 < notional > max_order:
+            errors.append(
+                f"live.test_order_notional_usd ({notional}) must not exceed "
+                f"safety.max_order_size_usd ({max_order})."
             )
 
     if errors:

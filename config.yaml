@@ -6,6 +6,7 @@ runtime:
   trading_enabled: true
   portfolio_value: 10000.0
   paper_db_path: paper_journal.db
+  live_db_path: live_journal.db
 
 symbols:
   - BTC-USD
@@ -65,3 +66,11 @@ safety:
   #   2. Environment variable LIVE_TRADING_CONFIRMED=true
   # Paper mode ignores this flag entirely.
   live_trading_confirmed: false
+
+# Live-mode order settings.
+# Ignored entirely in paper mode.
+live:
+  # Fixed USD notional per order for first live validation.
+  # Overrides normal risk-based sizing when > 0.
+  # Set to 0.0 to revert to standard risk sizing after initial test.
+  test_order_notional_usd: 10.0

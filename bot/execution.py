@@ -9,9 +9,15 @@ from .risk import RiskManager
 logger = logging.getLogger(__name__)
 
 class ExecutionService:
-    def __init__(self, portfolio_value: float = 10000.0, safeguards=None):
+    def __init__(
+        self,
+        portfolio_value: float = 10000.0,
+        safeguards=None,
+        live_test_notional_usd: float = 0.0,
+    ):
         self.portfolio_value = portfolio_value
         self._safeguards = safeguards  # optional; enables size cap checks
+        self._live_test_notional_usd = live_test_notional_usd  # 0 = normal risk sizing
 
     def process_signal(self, signal: Signal) -> Optional[Order]:
         """
@@ -37,7 +43,17 @@ class ExecutionService:
             logger.error(f"Signal {signal.signal_id} contains missing or unstructured data correctly. Rejecting.")
             return self._record_rejected_order(signal, "REJECTED_INVALID_DATA")
 
-        size = RiskManager.calculate_size(self.portfolio_value, entry_price, stop_loss)
+        if self._live_test_notional_usd > 0:
+            # Fixed-notional override: bypass risk sizing for first live validation.
+            # The stop is still set structurally; only the entry size changes.
+            size = round(self._live_test_notional_usd / entry_price, 8)
+            logger.info(
+                f"Live test notional: ${self._live_test_notional_usd:.2f} "
+                f"→ size={size} @ {entry_price}"
+            )
+        else:
+            size = RiskManager.calculate_size(self.portfolio_value, entry_price, stop_loss)
+
         if size <= 0:
             logger.warning(f"Calculated size for {signal.signal_id} is <= 0. Rejecting.")
             return self._record_rejected_order(signal, "REJECTED_INVALID_SIZE")
