@@ -9,6 +9,41 @@ logger = logging.getLogger(__name__)
 
 class Journal:
     @staticmethod
+    def insert_signal(signal: Signal) -> bool:
+        query = """
+            INSERT INTO signals (
+                signal_id, symbol, signal_type, regime_snapshot,
+                breakout_level, retest_level, atr, rsi, status,
+                execution_price, strategy_id, strategy_version,
+                decision_time_us, expires_at_us, stop_price,
+                target_price, time_stop_seconds, source_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(signal_id) DO NOTHING
+        """
+        cursor = db.execute(query, (
+            signal.signal_id,
+            signal.symbol,
+            signal.signal_type,
+            signal.regime_snapshot,
+            signal.breakout_level,
+            signal.retest_level,
+            signal.atr,
+            signal.rsi,
+            signal.status,
+            signal.execution_price,
+            signal.strategy_id,
+            signal.strategy_version,
+            signal.decision_time_us,
+            signal.expires_at_us,
+            signal.stop_price,
+            signal.target_price,
+            signal.time_stop_seconds,
+            signal.source_hash,
+        ))
+        return bool(cursor.rowcount)
+
+    @staticmethod
     def upsert_bar(bar: Bar):
         query = """
             INSERT INTO bars (symbol, timeframe, ts_open, open, high, low, close, volume)
@@ -158,8 +193,13 @@ class Journal:
     @staticmethod
     def upsert_position(position_data: dict):
         query = """
-            INSERT INTO positions (symbol, entry_ts, avg_entry, current_size, realized_pnl, unrealized_pnl, stop_price, state, stop_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO positions (
+                symbol, entry_ts, avg_entry, current_size, realized_pnl,
+                unrealized_pnl, stop_price, state, stop_active, entry_order_id,
+                strategy_id, strategy_version, entry_fee, target_price,
+                time_stop_at, source_signal_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol) DO UPDATE SET
                 entry_ts=excluded.entry_ts,
                 avg_entry=excluded.avg_entry,
@@ -168,12 +208,26 @@ class Journal:
                 unrealized_pnl=excluded.unrealized_pnl,
                 stop_price=excluded.stop_price,
                 state=excluded.state,
-                stop_active=excluded.stop_active
+                stop_active=excluded.stop_active,
+                entry_order_id=excluded.entry_order_id,
+                strategy_id=excluded.strategy_id,
+                strategy_version=excluded.strategy_version,
+                entry_fee=excluded.entry_fee,
+                target_price=excluded.target_price,
+                time_stop_at=excluded.time_stop_at,
+                source_signal_hash=excluded.source_signal_hash
         """
         db.execute(query, (
             position_data['symbol'], position_data['entry_ts'],
             position_data['avg_entry'], position_data['current_size'],
             position_data['realized_pnl'], position_data['unrealized_pnl'],
             position_data['stop_price'], position_data['state'],
-            1 if position_data.get('stop_active') else 0
+            1 if position_data.get('stop_active') else 0,
+            position_data.get('entry_order_id'),
+            position_data.get('strategy_id'),
+            position_data.get('strategy_version'),
+            float(position_data.get('entry_fee', 0.0) or 0.0),
+            position_data.get('target_price'),
+            position_data.get('time_stop_at'),
+            position_data.get('source_signal_hash'),
         ))

@@ -1,0 +1,28 @@
+[
+  {
+    "native_id": "FOMC-2026-01",
+    "vintage": "v1",
+    "event_time_us": 1769454000000000,
+    "availability_time_us": 1769626800000000,
+    "payload": {
+      "meeting": "January 2026",
+      "statement_time_utc": "2026-01-28T19:00:00Z",
+      "decision": "hold",
+      "target_range_bps": [400, 425],
+      "kind": "scheduled_statement"
+    }
+  },
+  {
+    "native_id": "FOMC-2026-03",
+    "vintage": "v1",
+    "event_time_us": 1773684000000000,
+    "availability_time_us": 1773856800000000,
+    "payload": {
+      "meeting": "March 2026",
+      "statement_time_utc": "2026-03-18T18:00:00Z",
+      "decision": "cut",
+      "target_range_bps": [375, 400],
+      "kind": "scheduled_statement"
+    }
+  }
+]

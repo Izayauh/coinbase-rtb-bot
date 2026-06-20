@@ -29,6 +29,7 @@ import json
 import logging
 
 from .journal import Journal
+from .notifications import maybe_send_event_notification
 
 logger = logging.getLogger(__name__)
 
@@ -39,3 +40,7 @@ def log_event(event_type: str, **kwargs) -> None:
         Journal.append_event(event_type, json.dumps(kwargs))
     except Exception as exc:
         logger.error("Failed to log event %s: %s", event_type, exc)
+    try:
+        maybe_send_event_notification(event_type, kwargs)
+    except Exception as exc:
+        logger.error("Failed to send notification for event %s: %s", event_type, exc)

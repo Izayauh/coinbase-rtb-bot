@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from bot.models import Signal, Order
 from bot.db import db
@@ -246,3 +248,106 @@ def test_position_size_cap_disables_trading_after_fill(test_db):
 
     assert sg.trading_enabled is False
     assert "position_size_exceeded" in sg._tripped
+
+
+def test_expired_candidate_signal_is_rejected(test_db, monkeypatch):
+    from bot import config
+
+    monkeypatch.setattr(
+        config,
+        "strategy_id",
+        lambda: "btc_derivatives_stress_exhaustion",
+    )
+    monkeypatch.setattr(config, "strategy_version", lambda: "1.0.0")
+    signal = Signal(
+        signal_id="expired_candidate",
+        symbol="BTC-USD",
+        signal_type="LONG",
+        regime_snapshot="{}",
+        breakout_level=100.0,
+        retest_level=100.0,
+        atr=1.0,
+        rsi=0.0,
+        status="NEW",
+        execution_price=100.0,
+        strategy_id="btc_derivatives_stress_exhaustion",
+        strategy_version="1.0.0",
+        expires_at_us=int(time.time() * 1_000_000) - 1,
+        stop_price=99.0,
+        target_price=101.5,
+        time_stop_seconds=14400,
+    )
+    Journal.insert_signal(signal)
+
+    order = ExecutionService(live_test_notional_usd=10.0).process_signal(signal)
+
+    assert order.status == "REJECTED_EXPIRED"
+
+
+def test_candidate_fill_persists_explicit_exit_contract(
+    test_db,
+    monkeypatch,
+):
+    from bot import config
+
+    monkeypatch.setattr(
+        config,
+        "strategy_id",
+        lambda: "btc_derivatives_stress_exhaustion",
+    )
+    monkeypatch.setattr(config, "strategy_version", lambda: "1.0.0")
+    signal = Signal(
+        signal_id="candidate_exit_contract",
+        symbol="BTC-USD",
+        signal_type="LONG",
+        regime_snapshot="{}",
+        breakout_level=100.0,
+        retest_level=100.0,
+        atr=1.0,
+        rsi=0.0,
+        status="NEW",
+        execution_price=100.0,
+        strategy_id="btc_derivatives_stress_exhaustion",
+        strategy_version="1.0.0",
+        expires_at_us=int(time.time() * 1_000_000) + 60_000_000,
+        stop_price=99.0,
+        target_price=101.5,
+        time_stop_seconds=14400,
+        source_hash="advisory-hash",
+    )
+    Journal.insert_signal(signal)
+    service = ExecutionService(live_test_notional_usd=10.0)
+    order = service.process_signal(signal)
+
+    service.handle_fill(
+        order,
+        signal,
+        fill_price=100.0,
+        fill_size=order.size,
+    )
+
+    position = Journal.get_open_position("BTC-USD")
+    assert position["stop_price"] == 99.0
+    assert position["target_price"] == 101.5
+    assert position["time_stop_at"] >= int(time.time()) + 14395
+    assert position["source_signal_hash"] == "advisory-hash"
+
+
+def test_candidate_mode_rejects_untagged_legacy_signal(
+    test_db,
+    monkeypatch,
+):
+    from bot import config
+
+    monkeypatch.setattr(
+        config,
+        "strategy_id",
+        lambda: "btc_derivatives_stress_exhaustion",
+    )
+    monkeypatch.setattr(config, "strategy_version", lambda: "1.0.0")
+    signal = make_signal(signal_id="legacy_under_candidate")
+    insert_signal(signal)
+
+    order = ExecutionService().process_signal(signal)
+
+    assert order.status == "REJECTED_STRATEGY_MISMATCH"

@@ -121,6 +121,129 @@ def _check_stale_safeguard_db(db_path: str, ks_file: str) -> str | None:
     return None
 
 
+def _response_dict(response) -> dict:
+    if hasattr(response, "to_dict"):
+        try:
+            return response.to_dict()
+        except Exception:
+            return {}
+    if isinstance(response, dict):
+        return response
+    return getattr(response, "__dict__", {}) or {}
+
+
+def _response_field(response, name: str, default=None):
+    if isinstance(response, dict):
+        return response.get(name, default)
+    if hasattr(response, name):
+        return getattr(response, name)
+    data = _response_dict(response)
+    return data.get(name, default)
+
+
+def _preview_configured_live_buy(client) -> str | None:
+    """
+    Preview the exact first-live BUY shape without placing an order.
+
+    The bot submits limit IOC orders. For fixed-notional first-live mode we can
+    derive a representative base size from the live product price, then ask
+    Coinbase whether that order is acceptable. This catches insufficient funds,
+    product restrictions, and account-scope issues before startup says READY.
+    """
+    notional = config.live_test_order_notional_usd()
+    if notional <= 0:
+        return None
+
+    syms = config.symbols()
+    if not syms:
+        return None
+    symbol = syms[0]
+
+    try:
+        product = client.get_product(symbol)
+        price = float(_response_field(product, "price", 0.0) or 0.0)
+        if price <= 0:
+            response = client.preview_market_order_buy(
+                product_id=symbol,
+                quote_size=f"{notional:.2f}",
+            )
+        else:
+            from bot.risk import RiskManager  # noqa: PLC0415
+
+            base_size = round(notional / price, 8)
+            if base_size <= 0:
+                return (
+                    f"Configured live buy preview failed: ${notional:.2f} "
+                    f"is too small for {symbol} at price {price:.2f}"
+                )
+            response = client.preview_limit_order_ioc_buy(
+                product_id=symbol,
+                base_size=f"{base_size:.8f}",
+                limit_price=f"{RiskManager.get_ioc_limit(price):.2f}",
+            )
+    except Exception as exc:
+        return f"Configured live buy preview failed for {symbol}: {exc}"
+
+    data = _response_dict(response)
+    errors = data.get("errors") or data.get("error_response")
+    failure = (
+        data.get("preview_failure_reason")
+        or data.get("failure_reason")
+        or data.get("reject_reason")
+    )
+    if errors or failure:
+        return (
+            f"Configured live buy preview failed for {symbol}: "
+            f"{errors or failure}"
+        )
+    return None
+
+
+def check_runtime_readiness() -> tuple:
+    """Return readiness for keeping the live runtime online, not for BUYs.
+
+    Entry halts, failed strategy authorization, and persisted risk guards must
+    not prevent the process from restarting: market-data capture, monitoring,
+    reconciliation, and risk-reducing exits still need a live runtime.
+    """
+    blockers: list[str] = []
+    live_balances: dict = {}
+
+    if config.runtime_mode() != "live":
+        blockers.append("config.yaml runtime.mode must be 'live'")
+    if not config.live_trading_confirmed():
+        blockers.append("config.yaml safety.live_trading_confirmed must be true")
+    if os.environ.get("LIVE_TRADING_CONFIRMED", "").lower() != "true":
+        blockers.append("Env LIVE_TRADING_CONFIRMED must be true for the child process")
+
+    api_key = os.environ.get("COINBASE_API_KEY", "")
+    api_secret = os.environ.get("COINBASE_API_SECRET", "")
+    if not api_key:
+        blockers.append("Env var COINBASE_API_KEY is not set or empty")
+    if not api_secret:
+        blockers.append("Env var COINBASE_API_SECRET is not set or empty")
+
+    syms = config.symbols()
+    allowlist = config.product_allowlist()
+    if len(syms) != 1:
+        blockers.append(f"Exactly one runtime symbol is required; got {syms}")
+    elif allowlist and syms[0] not in allowlist:
+        blockers.append(f"Symbol '{syms[0]}' is not in product_allowlist")
+
+    if api_key and api_secret:
+        try:
+            from coinbase.rest import RESTClient
+
+            client = RESTClient(api_key=api_key, api_secret=api_secret)
+            live_balances = parse_coinbase_balances(client.get_accounts())
+            if not live_balances:
+                blockers.append("Coinbase REST returned no accounts")
+        except Exception as exc:
+            blockers.append(f"Coinbase runtime authentication failed: {exc}")
+
+    return not blockers, blockers, live_balances
+
+
 def check_readiness() -> tuple:
     """
     Return (ready: bool, blockers: list[str], live_balances: dict).
@@ -194,7 +317,15 @@ def check_readiness() -> tuple:
             f"Symbol '{syms[0]}' is not in product_allowlist {allowlist}"
         )
 
-    # 9. Coinbase REST auth + account fetch (only attempted when creds present)
+    # 9. Strategy evidence and explicit live authorization
+    if config.require_strategy_authorization():
+        from bot.strategy_authorization import validate_configured_authorization
+
+        authorized, reason, _ = validate_configured_authorization()
+        if not authorized:
+            blockers.append(f"Strategy authorization blocked: {reason}")
+
+    # 10. Coinbase REST auth + account fetch (only attempted when creds present)
     if api_key and api_secret:
         try:
             from coinbase.rest import RESTClient  # noqa: PLC0415
@@ -206,10 +337,13 @@ def check_readiness() -> tuple:
                     "Coinbase REST call returned no accounts — "
                     "verify credentials map to the correct portfolio scope"
                 )
+            preview_blocker = _preview_configured_live_buy(client)
+            if preview_blocker:
+                blockers.append(preview_blocker)
         except Exception as exc:
             blockers.append(f"Coinbase REST auth/account fetch failed: {exc}")
 
-    # 10. Adapter selection: CoinbaseAdapter when mode==live and _enabled=True.
+    # 11. Adapter selection: CoinbaseAdapter when mode==live and _enabled=True.
     #     Covered structurally by checks 1+4+5. No independent check added.
 
     ready = len(blockers) == 0

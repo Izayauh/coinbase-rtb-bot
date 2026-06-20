@@ -24,6 +24,14 @@ class Signal:
     rsi: float
     status: str
     execution_price: float
+    strategy_id: Optional[str] = None
+    strategy_version: Optional[str] = None
+    decision_time_us: Optional[int] = None
+    expires_at_us: Optional[int] = None
+    stop_price: Optional[float] = None
+    target_price: Optional[float] = None
+    time_stop_seconds: Optional[int] = None
+    source_hash: Optional[str] = None
 
 @dataclass
 class Order:
@@ -52,6 +60,13 @@ class Position:
     stop_price: float
     state: str
     stop_active: bool = False
+    entry_order_id: Optional[str] = None
+    strategy_id: Optional[str] = None
+    strategy_version: Optional[str] = None
+    entry_fee: float = 0.0
+    target_price: Optional[float] = None
+    time_stop_at: Optional[int] = None
+    source_signal_hash: Optional[str] = None
 
 @dataclass
 class Execution:

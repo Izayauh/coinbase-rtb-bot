@@ -1,0 +1,26 @@
+{
+  "frozen_at": "2026-04-05T02:21:34Z",
+  "note": "Hardcoded top-5 by known Coinbase spot volume. API was unreachable for live query.",
+  "pairs": [
+    {
+      "symbol": "BTC-USD",
+      "volume_usd_24h": 500000000
+    },
+    {
+      "symbol": "ETH-USD",
+      "volume_usd_24h": 200000000
+    },
+    {
+      "symbol": "SOL-USD",
+      "volume_usd_24h": 100000000
+    },
+    {
+      "symbol": "XRP-USD",
+      "volume_usd_24h": 80000000
+    },
+    {
+      "symbol": "DOGE-USD",
+      "volume_usd_24h": 50000000
+    }
+  ]
+}

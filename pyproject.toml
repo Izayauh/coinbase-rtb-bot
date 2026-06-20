@@ -1,2 +1,4 @@
 [tool.pytest.ini_options]
-testpaths = ["bot/tests"]
+# bot/tests first (existing live-bot coverage is unchanged). research suites are
+# additive — see docs/research_pipeline/ARCHITECTURE_REVIEW.md finding F-H1.
+testpaths = ["bot/tests", "research/tests", "research_pipeline/tests"]

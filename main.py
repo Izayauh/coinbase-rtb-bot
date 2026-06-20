@@ -9,8 +9,38 @@ src/ is not imported. bot/main.py has been deleted.
 """
 import asyncio
 import logging
+import os
 import sys
 import time
+from pathlib import Path
+
+from bot.single_instance import AlreadyRunningError, SingleInstance
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger("MAIN")
+
+_INSTANCE_GUARD = None
+if __name__ == "__main__":
+    _INSTANCE_GUARD = SingleInstance(
+        Path(__file__).resolve().with_name(".cb_rtb_bot.lock")
+    )
+    try:
+        _INSTANCE_GUARD.acquire()
+    except AlreadyRunningError as exc:
+        logger.error("Duplicate runtime blocked: %s", exc)
+        try:
+            from bot.notifications import send_operational_notification
+
+            send_operational_notification(
+                "Coinbase duplicate bot blocked",
+                f"A second crypto bot attempted to start and was stopped.\n{exc}",
+            )
+        except Exception:
+            pass
+        raise SystemExit(3)
 
 import bot.config as config
 from bot.db import db
@@ -26,11 +56,29 @@ from bot.models import Signal, Order
 from bot.events import log_event
 from bot.readiness import parse_coinbase_balances
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s %(message)s",
-)
-logger = logging.getLogger("MAIN")
+_RUNTIME_ERROR_LAST: dict[str, float] = {}
+
+
+def _build_strategy_engine():
+    strategy_id = config.strategy_id()
+    if strategy_id == "btc_breakout_retest_continuation":
+        return StateMachine()
+    if strategy_id == "btc_derivatives_stress_exhaustion":
+        # Candidate entries arrive only through the verified, expiring cloud
+        # advisory bridge. The archived breakout engine must never run under
+        # the candidate's id or authorization.
+        return None
+    raise RuntimeError(f"No runtime strategy engine for {strategy_id}")
+
+
+def _report_runtime_error(component: str, exc: BaseException) -> None:
+    """Log every error, but push at most once per component every five minutes."""
+    logger.error("%s error: %s", component, exc)
+    now = time.time()
+    if now - _RUNTIME_ERROR_LAST.get(component, 0.0) < 300:
+        return
+    _RUNTIME_ERROR_LAST[component] = now
+    log_event("RUNTIME_ERROR", component=component, error=str(exc)[:400])
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +99,11 @@ def _process_new_signals(exec_service: ExecutionService, safeguards: Safeguards)
             "SIGNAL_EMITTED",
             signal_id=signal.signal_id,
             symbol=signal.symbol,
+            signal_type=signal.signal_type,
+            breakout_level=signal.breakout_level,
+            retest_level=signal.retest_level,
+            atr=signal.atr,
+            rsi=signal.rsi,
             execution_price=signal.execution_price,
         )
 
@@ -63,6 +116,8 @@ def _process_new_signals(exec_service: ExecutionService, safeguards: Safeguards)
             "REJECTED_INVALID_DATA",
             "REJECTED_INVALID_SIZE",
             "REJECTED_SIZE_CAP",
+            "REJECTED_EXPIRED",
+            "REJECTED_STRATEGY_MISMATCH",
         }
         status_map = {"PENDING": "ORDER_PENDING"} | {s: s for s in _REJECTION_STATUSES}
         new_status = status_map.get(order.status, "PROCESSED")
@@ -127,6 +182,7 @@ def _collect_reconcile_events(before_orders: dict, symbol: str) -> None:
             log_event(
                 "ORDER_SUBMITTED",
                 order_id=order_id,
+                symbol=row["symbol"],
                 exchange_order_id=cur_exch_id,
             )
         elif prev_status in ("PENDING", "PARTIAL") and cur_status == "FILLED":
@@ -134,6 +190,7 @@ def _collect_reconcile_events(before_orders: dict, symbol: str) -> None:
                 "ORDER_FILLED",
                 order_id=order_id,
                 signal_id=row["signal_id"],
+                symbol=row["symbol"],
                 fill_price=row["price"],
                 fill_size=row["executed_size"],
             )
@@ -149,11 +206,21 @@ def _collect_reconcile_events(before_orders: dict, symbol: str) -> None:
                 )
         elif prev_status == "PENDING" and cur_status == "FAILED":
             remote_status = row.get("fail_reason", "UNKNOWN")
-            log_event("ORDER_FAILED_EXCHANGE", order_id=order_id, remote_status=remote_status)
+            log_event(
+                "ORDER_FAILED_EXCHANGE",
+                order_id=order_id,
+                symbol=row["symbol"],
+                remote_status=remote_status,
+            )
         elif prev_status == "PENDING" and cur_status == "EXPIRED":
             created_at = row.get("created_at", 0)
             age = int(time.time()) - created_at if created_at else 0
-            log_event("ORDER_TIMEOUT", order_id=order_id, age_seconds=age)
+            log_event(
+                "ORDER_TIMEOUT",
+                order_id=order_id,
+                symbol=row["symbol"],
+                age_seconds=age,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +299,7 @@ async def signal_consumer_task(
             _collect_reconcile_events(before_orders, symbol)
             _check_fills_and_positions(exec_service, safeguards, symbol)
         except Exception as exc:
-            logger.error("Signal consumer error: %s", exc)
+            _report_runtime_error("signal_consumer", exc)
         await asyncio.sleep(reconcile_interval)
 
 
@@ -252,7 +319,7 @@ async def safeguard_task(
                     guard_name=str(list(safeguards._tripped)),
                 )
         except Exception as exc:
-            logger.error("Safeguard task error: %s", exc)
+            _report_runtime_error("safeguard_monitor", exc)
         await asyncio.sleep(reconcile_interval)
 
 
@@ -283,7 +350,7 @@ async def equity_snapshot_task(
                 open_positions=open_pos,
             )
         except Exception as exc:
-            logger.error("Equity snapshot error: %s", exc)
+            _report_runtime_error("equity_snapshot", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -462,10 +529,11 @@ async def run() -> None:
             "SELECT COUNT(*) as c FROM bars WHERE symbol=? AND timeframe='4h'",
             (sym,),
         )[0]["c"]
-        if have_1h < 25 or have_4h < 205:
+        # Live startup always refreshes recent REST history. This repairs any
+        # hourly holes created by downtime before the strategy is re-armed.
+        if mode == "live" or have_1h < 25 or have_4h < 205:
             logger.info(
-                "Bars insufficient for strategy (%d/25 1h, %d/205 4h). "
-                "Running historical backfill ...",
+                "Refreshing historical bars (%d 1h, %d 4h currently stored) ...",
                 have_1h, have_4h,
             )
             try:
@@ -491,11 +559,18 @@ async def run() -> None:
     # 4b. Strategy readiness diagnostic — operator must see this at every startup.
     n1h = len(aggregator.get_bars_1h())
     n4h = len(aggregator.get_bars_4h())
-    strat_ready = aggregator.ready()
+    external_candidate = (
+        config.strategy_id() == "btc_derivatives_stress_exhaustion"
+    )
+    strat_ready = True if external_candidate else aggregator.ready()
     print("\n=== Strategy Readiness ===")
     print(f"  1h bars : {n1h} / 25 required")
     print(f"  4h bars : {n4h} / 205 required")
-    if strat_ready:
+    if external_candidate:
+        print("  Strategy: external verified derivatives-stress advisory")
+        print("  STRATEGY IMPLEMENTATION READY: YES")
+        print("  Evidence + authorization + entry-halt gates still apply")
+    elif strat_ready:
         print("  STRATEGY READY: YES")
     else:
         reasons = []
@@ -507,7 +582,23 @@ async def run() -> None:
     print("==========================\n")
 
     # 5. State machine (loads persisted state)
-    state_machine = StateMachine()
+    state_machine = _build_strategy_engine()
+    if state_machine is not None and state_machine.state == StateMachine.DISABLED:
+        if state_machine.recover_from_history(
+            aggregator.get_bars_1h(),
+            aggregator.get_bars_4h(),
+        ):
+            log_event(
+                "STRATEGY_RECOVERED",
+                symbol=sym,
+                reason="REST history is contiguous; reset to IDLE for next closed bar",
+            )
+        else:
+            log_event(
+                "STRATEGY_DISABLED",
+                symbol=sym,
+                reason="Recent 1h/4h history is still not contiguous after refresh",
+            )
 
     # 6. Safeguards (constructed before ExecutionService so it can be wired in)
     safeguards = Safeguards(
@@ -518,6 +609,7 @@ async def run() -> None:
         kill_switch_file=ks_file,
         max_order_size_usd=config.max_order_size_usd(),
         max_position_size_usd=config.max_position_size_usd(),
+        require_strategy_authorization=config.require_strategy_authorization(),
     )
 
     # 7. Execution service
@@ -531,7 +623,11 @@ async def run() -> None:
     def on_bar_close(bar):
         Journal.upsert_bar(bar)
         aggregator.add(bar)
-        if bar.timeframe == "1h" and aggregator.ready():
+        if (
+            state_machine is not None
+            and bar.timeframe == "1h"
+            and aggregator.ready()
+        ):
             state_machine.process_bars(aggregator.get_bars_1h(), aggregator.get_bars_4h())
 
     md_processor = MarketDataProcessor(coinbase_adapter, on_bar_close_callback=on_bar_close)

@@ -15,6 +15,13 @@ timeframes:
   signal: 1h
   regime: 4h
 
+strategy:
+  id: btc_breakout_retest_continuation
+  version: "1.0.0"
+  # Intentionally absent until a candidate clears every frozen evidence gate
+  # and receives a separate one-writer live authorization.
+  authorization_file: strategy_authorization.json
+
 risk:
   risk_per_trade: 0.0035
   reduced_risk_per_trade: 0.0020
@@ -43,13 +50,25 @@ execution:
   max_entry_slippage_bps: 10
   max_spread_bps: 8
   reconcile_interval_sec: 5
-  ws_stale_timeout_sec: 15
+  # 30s (was 15) so the planned ~115s JWT renewal reconnect can't trip the
+  # stale-stream guard; a genuine stream death is still caught within 30s and
+  # open positions carry stops.
+  ws_stale_timeout_sec: 30
   max_pending_order_age_sec: 60
 
 safety:
   # Hard kill switch — create a file named KILL_SWITCH in the repo root
-  # to immediately block all order placement. Checked every reconcile tick.
+  # to immediately block new BUY exposure. Automatic risk-reducing SELL exits
+  # remain enabled. Checked every reconcile tick and immediately before BUY.
   kill_switch_file: KILL_SWITCH
+
+  # Research evidence is not order authority. Live BUYs require a matching,
+  # expiring, tamper-evident authorization artifact for strategy.id/version.
+  require_strategy_authorization: true
+  # Candidate signal staging and the final Coinbase BUY call both require a
+  # fresh READY receipt generated after the entry halt has been removed.
+  acceptance_receipt_file: tiny_live_acceptance.json
+  acceptance_receipt_max_age_seconds: 300
 
   # Product allowlist — only symbols in this list may be traded.
   product_allowlist:
@@ -58,8 +77,8 @@ safety:
   # Order and position size caps (USD notional).
   # Orders exceeding max_order_size_usd are rejected before submission.
   # Fills that would push position above max_position_size_usd disable trading.
-  max_order_size_usd: 500.0
-  max_position_size_usd: 1000.0
+  max_order_size_usd: 15.0
+  max_position_size_usd: 30.0
 
   # Live trading gate. Both conditions must be true to run in live mode:
   #   1. This flag set to true in config
@@ -74,3 +93,14 @@ live:
   # Overrides normal risk-based sizing when > 0.
   # Set to 0.0 to revert to standard risk sizing after initial test.
   test_order_notional_usd: 10.0
+  auto_exit_enabled: true
+  exit_slippage_bps: 20
+  take_profit_r: 1.5
+  time_stop_bars: 12
+
+research:
+  db_path: research_pipeline_data/research.db
+  advisory_project: bitwise-trader
+  advisory_bucket: bitwise-trader-research-589900489794
+  advisory_object: coinbase/BTC-USD/advisory/btc_derivatives_stress_exhaustion/1.0.0/latest.json
+  advisory_max_age_seconds: 180

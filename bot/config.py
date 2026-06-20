@@ -101,6 +101,66 @@ def live_test_order_notional_usd() -> float:
     return float(_raw.get("live", {}).get("test_order_notional_usd", 0.0))
 
 
+def strategy_id() -> str:
+    return str(_raw.get("strategy", {}).get("id", "unversioned_strategy"))
+
+
+def strategy_version() -> str:
+    return str(_raw.get("strategy", {}).get("version", "0"))
+
+
+def strategy_authorization_file() -> str:
+    return str(
+        _raw.get("strategy", {}).get(
+            "authorization_file", "strategy_authorization.json"
+        )
+    )
+
+
+def require_strategy_authorization() -> bool:
+    return bool(
+        _raw.get("safety", {}).get("require_strategy_authorization", False)
+    )
+
+
+def acceptance_receipt_file() -> str:
+    return str(
+        _raw.get("safety", {}).get(
+            "acceptance_receipt_file", "tiny_live_acceptance.json"
+        )
+    )
+
+
+def acceptance_receipt_max_age_seconds() -> int:
+    return int(
+        _raw.get("safety", {}).get(
+            "acceptance_receipt_max_age_seconds", 300
+        )
+    )
+
+
+def research_advisory_project() -> str:
+    return str(
+        (_raw.get("research") or {}).get(
+            "advisory_project", "bitwise-trader"
+        )
+    )
+
+
+def research_advisory_bucket() -> str:
+    return str((_raw.get("research") or {}).get("advisory_bucket", ""))
+
+
+def research_advisory_object() -> str:
+    return str((_raw.get("research") or {}).get("advisory_object", ""))
+
+
+def research_advisory_max_age_seconds() -> int:
+    return int(
+        (_raw.get("research") or {}).get("advisory_max_age_seconds", 180)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fail-fast startup validation
 # ---------------------------------------------------------------------------
@@ -154,6 +214,20 @@ def validate() -> None:
         errors.append("safety.max_order_size_usd must be > 0")
     if float(_raw.get("safety", {}).get("max_position_size_usd", 1000.0)) <= 0:
         errors.append("safety.max_position_size_usd must be > 0")
+
+    if require_strategy_authorization():
+        if not strategy_id().strip() or strategy_id() == "unversioned_strategy":
+            errors.append("strategy.id must be set when authorization is required")
+        if not strategy_version().strip() or strategy_version() == "0":
+            errors.append("strategy.version must be set when authorization is required")
+        if not research_advisory_bucket():
+            errors.append(
+                "research.advisory_bucket must be set when authorization is required"
+            )
+        if not research_advisory_object():
+            errors.append(
+                "research.advisory_object must be set when authorization is required"
+            )
 
     # Live gate: if mode is live, both config flag AND env var must be set.
     # Checked here as defence-in-depth even though live mode exits above.

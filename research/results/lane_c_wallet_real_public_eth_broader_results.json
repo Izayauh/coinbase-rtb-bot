@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-04-08T17:36:59.837509+00:00",
+  "wallet_csv": "research/examples/lane_c_wallet_events_real_public_eth_broader.csv",
+  "timeframe": "1h",
+  "parameters": {
+    "delay_hours": 4,
+    "consensus_window_hours": 24,
+    "min_wallets": 2,
+    "min_consensus_score": 2.0,
+    "min_liquidity_usd": 1000000.0,
+    "min_notional_usd": 1000.0,
+    "time_stop_bars": 168
+  },
+  "ingest_stats": {
+    "rows_seen": 6,
+    "rows_kept": 6
+  },
+  "symbols_tested": [
+    "ETH-USD"
+  ],
+  "results": [
+    {
+      "symbol": "ETH-USD",
+      "status": "ok",
+      "events_after_filter": 6,
+      "consensus_events": 4,
+      "signals": 4,
+      "trade_count": 3,
+      "win_rate": 0.3333333333333333,
+      "profit_factor": 0.5769818635732913,
+      "expectancy_pct": -0.006025989440392045,
+      "total_return_pct": -1.1396915837911692,
+      "max_drawdown_pct": 1.2921294616559318
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+event_ts,chain,wallet,token_symbol,token_address,action,usd_notional,price_usd,liquidity_usd,venue,tx_hash,wallet_score_hint,coinbase_symbol,label,is_router,is_exchange,is_contract
+2025-03-01T12:00:00Z,ethereum,0xalpha,ETH,0xeeee,buy,25000,3200,50000000,uniswap_v3,0xtx001,1.4,ETH-USD,sample_smart_wallet,false,false,false
+2025-03-01T18:00:00Z,base,0xbeta,ETH,0xeeee,accumulate,18000,3215,45000000,aerodrome,0xtx002,1.1,ETH-USD,sample_smart_wallet,false,false,false
+2025-03-02T02:00:00Z,solana,SoWallet1,SOL,So111,accumulate,14000,175,30000000,jupiter,0xtx003,1.2,SOL-USD,sample_smart_wallet,false,false,false
+2025-03-02T03:00:00Z,solana,SoWallet2,SOL,So111,buy,11000,176,28000000,jupiter,0xtx004,1.0,SOL-USD,sample_smart_wallet,false,false,false
+2025-03-03T09:00:00Z,ethereum,0xgamma,PEPE,0xpepe,buy,9000,0.00001,5000000,uniswap_v3,0xtx005,1.7,,sample_unmapped,false,false,false
+2025-03-03T10:00:00Z,ethereum,0xrouter,ETH,0xeeee,buy,50000,3225,60000000,uniswap_v3,0xtx006,1.8,ETH-USD,sample_router,true,false,false
+2025-03-03T12:00:00Z,base,0xdelta,ETH,0xeeee,sell,10000,3190,55000000,aerodrome,0xtx007,1.0,ETH-USD,sample_sell,false,false,false
+2025-03-03T14:00:00Z,ethereum,0xepsilon,LINK,0xlink,buy,700,14.5,12000000,uniswap_v3,0xtx008,1.2,LINK-USD,sample_too_small,false,false,false

@@ -17,6 +17,7 @@ from typing import List, Optional
 from .coinbase_adapter import CoinbaseAdapter
 from .models import Bar
 from .journal import Journal
+from .db import db
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +89,10 @@ def aggregate_4h(
         now = int(time.time())
 
     buckets: dict = {}
+    bucket_slots: dict[int, set[int]] = {}
     for b in bars_1h:
         boundary = (b.ts_open // _4H_SECONDS) * _4H_SECONDS
+        bucket_slots.setdefault(boundary, set()).add(b.ts_open)
         if boundary not in buckets:
             buckets[boundary] = Bar(
                 symbol=symbol, timeframe="4h", ts_open=boundary,
@@ -106,8 +109,18 @@ def aggregate_4h(
     # Drop current in-progress 4h bar
     current_boundary = (now // _4H_SECONDS) * _4H_SECONDS
     buckets.pop(current_boundary, None)
+    bucket_slots.pop(current_boundary, None)
 
-    return [buckets[k] for k in sorted(buckets)]
+    # Never persist a structurally incomplete 4h candle. A gap in the hourly
+    # source must not quietly turn into a distorted EMA/regime input.
+    complete = []
+    for boundary in sorted(buckets):
+        expected = {boundary + i * _1H_SECONDS for i in range(4)}
+        if bucket_slots.get(boundary) == expected:
+            complete.append(buckets[boundary])
+        else:
+            logger.warning("Dropping incomplete 4h bucket at %s", boundary)
+    return complete
 
 
 def backfill_bars(
@@ -172,6 +185,17 @@ def backfill_bars(
     # Persist via upsert — safe against duplicates
     for bar in all_1h:
         Journal.upsert_bar(bar)
+
+    # 4h bars are derived data. Clear the refreshed range first so a formerly
+    # incomplete bucket cannot survive after an hourly gap is discovered.
+    if all_1h:
+        first_4h = (all_1h[0].ts_open // _4H_SECONDS) * _4H_SECONDS
+        last_4h = (all_1h[-1].ts_open // _4H_SECONDS) * _4H_SECONDS
+        db.execute(
+            "DELETE FROM bars WHERE symbol=? AND timeframe='4h' "
+            "AND ts_open BETWEEN ? AND ?",
+            (symbol, first_4h, last_4h),
+        )
     for bar in bars_4h:
         Journal.upsert_bar(bar)
 

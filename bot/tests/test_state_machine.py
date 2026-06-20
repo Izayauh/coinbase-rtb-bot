@@ -83,6 +83,31 @@ def test_four_hour_gap_disables(test_db, mock_indicators):
     assert sm.state == StateMachine.DISABLED
 
 
+def test_disabled_state_recovers_only_from_contiguous_history(test_db, mock_indicators):
+    sm = StateMachine()
+    sm.state = StateMachine.DISABLED
+    sm._persist()
+
+    bars_1h = generate_bars(25, "1h")
+    bars_4h = generate_bars(205, "4h")
+    assert sm.recover_from_history(bars_1h, bars_4h) is True
+    assert sm.state == StateMachine.IDLE
+    assert sm.last_1h_ts == bars_1h[-1].ts_open
+    assert sm.last_4h_ts == bars_4h[-1].ts_open
+
+
+def test_disabled_state_stays_disabled_with_recent_gap(test_db, mock_indicators):
+    sm = StateMachine()
+    sm.state = StateMachine.DISABLED
+    sm._persist()
+
+    bars_1h = generate_bars(25, "1h")
+    bars_1h[-1].ts_open += 3600
+    bars_4h = generate_bars(205, "4h")
+    assert sm.recover_from_history(bars_1h, bars_4h) is False
+    assert sm.state == StateMachine.DISABLED
+
+
 def test_full_lifecycle_single_signal(test_db, mock_indicators):
     sm = StateMachine()
     bars_4h = generate_bars(205, "4h")

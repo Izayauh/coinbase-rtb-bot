@@ -29,6 +29,42 @@ class ExecutionService:
             logger.info(f"Signal {signal.signal_id} has already been processed (Idempotency Guard).")
             return Order(**existing_order_data)
 
+        from . import config
+
+        now_us = int(time.time() * 1_000_000)
+        if signal.expires_at_us and now_us > int(signal.expires_at_us):
+            logger.warning("Signal %s is expired; rejecting.", signal.signal_id)
+            return self._record_rejected_order(signal, "REJECTED_EXPIRED")
+        if (
+            signal.strategy_id
+            and (
+                signal.strategy_id != config.strategy_id()
+                or str(signal.strategy_version) != config.strategy_version()
+            )
+        ):
+            logger.error(
+                "Signal %s strategy %s/%s does not match config %s/%s.",
+                signal.signal_id,
+                signal.strategy_id,
+                signal.strategy_version,
+                config.strategy_id(),
+                config.strategy_version(),
+            )
+            return self._record_rejected_order(
+                signal, "REJECTED_STRATEGY_MISMATCH"
+            )
+        if (
+            config.strategy_id() == "btc_derivatives_stress_exhaustion"
+            and not signal.strategy_id
+        ):
+            logger.error(
+                "Untagged legacy signal %s cannot execute in candidate mode.",
+                signal.signal_id,
+            )
+            return self._record_rejected_order(
+                signal, "REJECTED_STRATEGY_MISMATCH"
+            )
+
         # 2. One-position model
         if Journal.has_active_exposure(signal.symbol):
             logger.info(f"Active exposure already exists for {signal.symbol}. Rejecting signal {signal.signal_id}.")
@@ -37,7 +73,11 @@ class ExecutionService:
         # 3. Entry constraints and Risk bounds
         entry_price = signal.execution_price
         # The true initial stop should be structurally distinct from entry. We use signal.retest_level and ATR.
-        stop_loss = signal.retest_level - signal.atr
+        stop_loss = (
+            float(signal.stop_price)
+            if signal.stop_price and float(signal.stop_price) > 0
+            else signal.retest_level - signal.atr
+        )
 
         if entry_price <= 0 or stop_loss <= 0 or signal.atr <= 0:
             logger.error(f"Signal {signal.signal_id} contains missing or unstructured data correctly. Rejecting.")
@@ -138,11 +178,17 @@ class ExecutionService:
         
         # compute and persist initial stop level using the signal context
         # do not rely on strategy state alone
-        stop_loss = signal.retest_level - signal.atr
+        stop_loss = (
+            float(signal.stop_price)
+            if signal.stop_price and float(signal.stop_price) > 0
+            else signal.retest_level - signal.atr
+        )
         
         # Upsert position
         open_pos_data = Journal.get_open_position(order.symbol)
         if not open_pos_data:
+            from . import config
+
             position = Position(
                 symbol=order.symbol,
                 entry_ts=int(time.time()),
@@ -152,7 +198,17 @@ class ExecutionService:
                 unrealized_pnl=0.0,
                 stop_price=stop_loss,
                 state="OPEN",
-                stop_active=True
+                stop_active=True,
+                entry_order_id=order.order_id,
+                strategy_id=config.strategy_id(),
+                strategy_version=config.strategy_version(),
+                entry_fee=fee,
+                target_price=signal.target_price,
+                time_stop_at=(
+                    int(time.time()) + int(signal.time_stop_seconds)
+                    if signal.time_stop_seconds else None
+                ),
+                source_signal_hash=signal.source_hash,
             )
         else:
             # Add to existing position
@@ -168,7 +224,14 @@ class ExecutionService:
                 unrealized_pnl=pos.unrealized_pnl,
                 stop_price=stop_loss, 
                 state="OPEN",
-                stop_active=True
+                stop_active=True,
+                entry_order_id=pos.entry_order_id or order.order_id,
+                strategy_id=pos.strategy_id,
+                strategy_version=pos.strategy_version,
+                entry_fee=float(pos.entry_fee or 0.0) + fee,
+                target_price=pos.target_price,
+                time_stop_at=pos.time_stop_at,
+                source_signal_hash=pos.source_signal_hash,
             )
             
         Journal.upsert_position(position.__dict__)

@@ -57,6 +57,7 @@ def _make_safeguards(trading_enabled=True):
         ws_stale_timeout_sec=15,
         max_daily_loss_fraction=0.015,
         portfolio_value=10000.0,
+        kill_switch_file="KILL_SWITCH_TEST_ABSENT",
     )
 
 

@@ -1,0 +1,3 @@
+# Research-pipeline data artifacts (databases, WAL/SHM, exports). Never commit these.
+*
+!.gitignore

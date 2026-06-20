@@ -167,9 +167,46 @@ class CoinbaseAdapter:
         ks_file = _cfg.kill_switch_file()
         if os.path.exists(ks_file):
             raise RuntimeError(
-                f"Kill switch '{ks_file}' is active — refusing to submit live order "
+                f"Kill switch / entry halt '{ks_file}' is active — refusing to submit live order "
                 f"{order.order_id}. Remove the file to resume."
             )
+
+        if _cfg.require_strategy_authorization():
+            from .strategy_registry import get_implementation
+
+            implementation = get_implementation(
+                _cfg.strategy_id(),
+                _cfg.strategy_version(),
+            )
+            if implementation is None or not implementation.implementation_ready:
+                reason = (
+                    implementation.reason
+                    if implementation is not None
+                    else "no registered live implementation"
+                )
+                raise RuntimeError(
+                    f"Live BUY blocked by strategy implementation gate: {reason}"
+                )
+            from pathlib import Path
+            from .acceptance_receipt import validate_acceptance_receipt
+
+            accepted, reason, _ = validate_acceptance_receipt(
+                Path(_cfg.acceptance_receipt_file()),
+                strategy_id=_cfg.strategy_id(),
+                strategy_version=_cfg.strategy_version(),
+                max_age_seconds=_cfg.acceptance_receipt_max_age_seconds(),
+            )
+            if not accepted:
+                raise RuntimeError(
+                    f"Live BUY blocked by final acceptance receipt: {reason}"
+                )
+            from .strategy_authorization import validate_configured_authorization
+
+            authorized, reason, _ = validate_configured_authorization()
+            if not authorized:
+                raise RuntimeError(
+                    f"Live BUY blocked by strategy authorization gate: {reason}"
+                )
 
         response = self.rest.create_order(
             client_order_id=order.order_id,
@@ -233,29 +270,21 @@ class CoinbaseAdapter:
         self._on_reconnect = fn
 
     async def ws_loop(self, product_ids: List[str]):
+        """Maintain the public market-data socket.
+
+        Market trades and heartbeats are public Coinbase channels. Keeping
+        them separate from the authenticated user channel removes the old
+        forced two-minute JWT reconnect cycle. Order state is reconciled over
+        REST elsewhere in the runtime, so no private socket is required here.
+        """
         self._ws_running = True
-        subscription_time = 0
-        _auth_backoff = 30  # seconds to wait after a JWT/auth error before retrying
+        retry_delay = 1
 
         while self._ws_running:
-            # Build JWT once per connect cycle.
-            # If it fails the WS can still run public channels (market data works
-            # without credentials); authenticated user channel will be skipped.
-            jwt_token = ""
-            if self._enabled:
-                try:
-                    jwt_token = self._build_jwt()
-                except ValueError as auth_err:
-                    logger.error(
-                        "JWT build failed — running public channels only. "
-                        "Fix COINBASE_API_SECRET then restart. Detail: %s", auth_err
-                    )
-                    # Back off before retrying to avoid hammering on a bad key
-                    await asyncio.sleep(_auth_backoff)
-                    continue
-
             try:
-                async with websockets.connect(self.WS_URL) as ws:
+                async with websockets.connect(
+                    self.WS_URL, close_timeout=3, ping_interval=20, ping_timeout=20
+                ) as ws:
                     self._reconnect_count += 1
                     if self._reconnect_count == 1:
                         logger.info("Direct Advanced WS connected.")
@@ -267,22 +296,15 @@ class CoinbaseAdapter:
                         except Exception:
                             pass
 
-                    # Public channels — always subscribed
+                    # Public channels need no JWT. Coinbase recommends
+                    # heartbeats alongside market data to keep the connection
+                    # open during quiet periods.
                     await ws.send(await self._ws_payload("market_trades", product_ids))
                     await ws.send(await self._ws_payload("heartbeats", product_ids))
-                    # Authenticated user channel — only when JWT is available
-                    if jwt_token:
-                        await ws.send(await self._ws_payload("user", product_ids, jwt_token))
-
-                    subscription_time = time.time()
+                    retry_delay = 1
 
                     async for msg in ws:
                         if not self._ws_running:
-                            break
-
-                        # Renew JWT at 115s to stay inside the 2-minute limit
-                        if time.time() - subscription_time > 115:
-                            logger.info("Renewing JWT explicit socket binding.")
                             break
 
                         data = json.loads(msg)
@@ -290,18 +312,21 @@ class CoinbaseAdapter:
 
                         if channel in ["market_trades", "heartbeats"]:
                             await self.market_queue.put(data)
-                        elif channel == "user":
-                            await self.user_queue.put(data)
 
             except Exception as e:
-                logger.error("WS Exception: %s", e)
-                await asyncio.sleep(5)
+                if not self._ws_running:
+                    break
+                logger.error(
+                    "WS Exception: %s; reconnecting in %ss",
+                    e or type(e).__name__,
+                    retry_delay,
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 30)
 
     def ws_connect(self, product_ids: List[str]):
         # market_trades and heartbeats are public channels — no credentials
-        # required. The ws_loop payload builder omits the JWT when _enabled=False.
-        # Only the user channel (private order events) requires auth, and ws_loop
-        # skips that subscription when _enabled=False.
+        # required. Orders and fills are reconciled via REST.
         self.ws_task = asyncio.create_task(self.ws_loop(product_ids))
 
     def ws_disconnect(self):

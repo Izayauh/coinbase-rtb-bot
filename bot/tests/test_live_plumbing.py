@@ -158,12 +158,21 @@ def test_submit_order_intent_calls_rest_in_live_mode(tmp_path):
 
     # Ensure no kill switch file exists at the default path
     import bot.config as _cfg
-    _cfg._raw.setdefault("safety", {})["kill_switch_file"] = str(tmp_path / "NO_KS")
-
-    result = adapter.submit_order_intent(order)
-
-    assert result["exchange_order_id"] == "exch_abc123"
-    assert "submitted_at" in result
+    original = _cfg._raw
+    _cfg._raw = {
+        **original,
+        "safety": {
+            **original.get("safety", {}),
+            "kill_switch_file": str(tmp_path / "NO_KS"),
+            "require_strategy_authorization": False,
+        },
+    }
+    try:
+        result = adapter.submit_order_intent(order)
+        assert result["exchange_order_id"] == "exch_abc123"
+        assert "submitted_at" in result
+    finally:
+        _cfg._raw = original
 
 
 def test_submit_order_intent_returns_synthetic_when_disconnected():
@@ -301,5 +310,50 @@ def test_live_test_order_notional_usd_defaults_to_zero():
     cfg._raw = {}
     try:
         assert cfg.live_test_order_notional_usd() == 0.0
+    finally:
+        cfg._raw = original
+
+
+def test_live_buy_requires_final_ready_acceptance_receipt(
+    monkeypatch,
+    tmp_path,
+):
+    import bot.config as cfg
+
+    original = cfg._raw
+    cfg._raw = {
+        "runtime": {"mode": "live"},
+        "symbols": ["BTC-USD"],
+        "strategy": {
+            "id": "btc_derivatives_stress_exhaustion",
+            "version": "1.0.0",
+        },
+        "safety": {
+            "require_strategy_authorization": True,
+            "kill_switch_file": str(tmp_path / "NO_HALT"),
+            "acceptance_receipt_file": str(tmp_path / "missing.json"),
+            "acceptance_receipt_max_age_seconds": 300,
+        },
+    }
+    adapter = CoinbaseAdapter(api_key="key", api_secret="secret")
+    adapter.rest = types.SimpleNamespace(
+        create_order=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("exchange must not be called")
+        )
+    )
+    order = Order(
+        order_id="receipt_gate",
+        signal_id="signal",
+        symbol="BTC-USD",
+        side="BUY",
+        price=100.0,
+        size=0.1,
+        executed_size=0.0,
+        status="PENDING",
+        created_at=1,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="final acceptance receipt"):
+            adapter.submit_order_intent(order)
     finally:
         cfg._raw = original

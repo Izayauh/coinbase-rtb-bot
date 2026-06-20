@@ -55,6 +55,22 @@ def test_migration_adds_missing_columns(old_db_path):
         orders_cols = [row[1] for row in cursor.fetchall()]
         assert "executed_size" in orders_cols
 
+        cursor.execute("PRAGMA table_info(positions)")
+        positions_cols = [row[1] for row in cursor.fetchall()]
+        assert "entry_order_id" in positions_cols
+        assert "strategy_id" in positions_cols
+        assert "strategy_version" in positions_cols
+        assert "entry_fee" in positions_cols
+
+        tables = {
+            row[0]
+            for row in cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "trade_outcomes" in tables
+        assert "learning_reviews" in tables
+
 def test_migration_is_idempotent(old_db_path):
     # Initialize Database twice to ensure repeated runs are safe
     db1 = Database(db_path=old_db_path)
@@ -83,3 +99,15 @@ def test_migration_is_idempotent(old_db_path):
         cursor.execute("SELECT * FROM orders WHERE order_id='ord1'")
         order = cursor.fetchone()
         assert order["executed_size"] == 0.5
+
+
+def test_database_uses_wal_and_busy_timeout(tmp_path):
+    db_path = str(tmp_path / "wal.db")
+    Database(db_path=db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+
+    assert mode.lower() == "wal"
+    assert timeout >= 5000

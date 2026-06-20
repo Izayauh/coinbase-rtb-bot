@@ -31,6 +31,11 @@
 Write-Host ""
 Write-Host "=== Live Session Pre-Launch ===" -ForegroundColor Yellow
 
+# Refresh this shell from the authoritative User environment so a terminal
+# opened before credential repair cannot retain a stale/truncated PEM.
+$env:COINBASE_API_KEY = [System.Environment]::GetEnvironmentVariable('COINBASE_API_KEY', 'User')
+$env:COINBASE_API_SECRET = [System.Environment]::GetEnvironmentVariable('COINBASE_API_SECRET', 'User')
+
 if (-not $env:COINBASE_API_KEY) {
     Write-Host "ERROR: COINBASE_API_KEY is not set. See setup instructions above." -ForegroundColor Red
     exit 1

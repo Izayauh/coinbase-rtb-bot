@@ -1,0 +1,56 @@
+# research_pipeline default configuration (cost_model_v1 / schema_v1).
+# Conservative, versioned defaults — see docs/research_pipeline/IMPLEMENTATION_CONTRACT.md.
+# Do NOT silently re-tune these after observing results (contract §15).
+
+schema_version: 1
+
+storage:
+  db_path: research_pipeline_data/research.db
+  storage_warn_bytes: 2147483648    # 2 GB  — warn
+  storage_block_bytes: 8589934592   # 8 GB  — collector refuses new raw writes
+  allow_raw_prune: false            # raw evidence is append-only; never prune unexported raw
+
+collector:
+  ws_url: "wss://advanced-trade-ws.coinbase.com"
+  product_ids: ["BTC-USD"]
+  # All four channels are public in Coinbase's current channel table. The initial
+  # BTC-USD Level2 snapshot is ~4-5 MB, so max_message_bytes must exceed the
+  # websocket client's 1 MB default.
+  channels: ["market_trades", "level2", "ticker", "heartbeats"]
+  max_message_bytes: 16777216       # 16 MB
+
+freshness:
+  max_quote_staleness_us: 2000000   # 2 s  — label quote staleness limit
+  max_book_staleness_us: 5000000    # 5 s  — book stale threshold
+  max_trade_gap_us: 60000000        # 60 s — quiet-tape threshold
+
+# cost_model_v1 — see contract §10. Defaults assume a ~$100 account in Coinbase
+# Advanced Trade's lowest 30-day-volume tier. The repo's research/costs.py 8 bps
+# taker default is ~10x too optimistic for this account and is NOT used here.
+cost_model:
+  version: "cost_model_v1"
+  taker_fee_bps: 60.0               # ~0.60% lowest-tier taker (stress sweep covers up to 120 bps)
+  slippage_bps: 2.0                 # per side, $10-$15 clip in a deep BTC book
+  adverse_selection_bps: 2.0        # short-horizon markout penalty on entries
+  latency_us: 500000               # 0.5 s decision->executable-quote allowance
+  half_spread_bps_fallback: 1.0     # used only when no real quote (quote_source=fallback_mid)
+  sensitivity_sweep: [0.5, 1.0, 1.5, 2.0]   # 2.0x ~= 120 bps taker = binding promotion stress
+
+labels:
+  horizons:                          # seconds — frozen set (contract §8)
+    "5m": 300
+    "15m": 900
+    "1h": 3600
+    "4h": 14400
+
+governance:
+  embargo_mult: 1.0
+  n_folds: 6
+  ess_floor: 50
+  pbo_threshold: 0.40
+  variant_budget:
+    microstructure: 12
+    context: 12
+
+replay:
+  parity_abs_tol: 1.0e-9

@@ -10,8 +10,9 @@ Tests:
   6.  check_readiness treats stale kill_switch (file gone) as NOT a blocker
   7.  check_readiness returns NO when Coinbase REST auth fails
   8.  check_readiness returns NO when REST returns no accounts
-  9.  _abort_if_live_creds_missing raises SystemExit when adapter._enabled=False
-  10. _abort_if_live_creds_missing is a no-op when adapter._enabled=True
+  9.  check_readiness returns NO when configured live buy preview fails
+  10. _abort_if_live_creds_missing raises SystemExit when adapter._enabled=False
+  11. _abort_if_live_creds_missing is a no-op when adapter._enabled=True
 """
 import json
 import os
@@ -44,7 +45,12 @@ def _live_config(ks_file: str, live_db: str = "live_journal_NONEXISTENT.db") -> 
     }
 
 
-def _patch_rest(success: bool = True, accounts=None, fail_msg: str = "mock auth error"):
+def _patch_rest(
+    success: bool = True,
+    accounts=None,
+    fail_msg: str = "mock auth error",
+    preview_error=None,
+):
     """Return a class suitable for monkeypatching coinbase.rest.RESTClient."""
     if not success:
         class FailClient:
@@ -60,6 +66,12 @@ def _patch_rest(success: bool = True, accounts=None, fail_msg: str = "mock auth 
             r = types.SimpleNamespace()
             r.accounts = _accounts
             return r
+        def get_product(self, product_id):
+            return types.SimpleNamespace(price="100.00")
+        def preview_limit_order_ioc_buy(self, **kwargs):
+            if preview_error:
+                return {"errors": [preview_error]}
+            return {"preview_id": "preview_ok"}
     return OkClient
 
 
@@ -265,6 +277,61 @@ def test_readiness_no_when_rest_returns_no_accounts(monkeypatch, tmp_path):
         ready, blockers, _ = check_readiness()
         assert not ready
         assert any("no accounts" in b.lower() or "portfolio scope" in b.lower() for b in blockers), blockers
+    finally:
+        config._raw = original
+
+
+def test_readiness_no_when_configured_live_buy_preview_fails(monkeypatch, tmp_path):
+    """BLOCKER reported when Coinbase rejects the configured first live BUY preview."""
+    ks_file = str(tmp_path / "KS_ABSENT")
+
+    monkeypatch.setenv("COINBASE_API_KEY", "test_key")
+    monkeypatch.setenv("COINBASE_API_SECRET", "test_secret")
+    monkeypatch.setenv("LIVE_TRADING_CONFIRMED", "true")
+    sys.modules["coinbase.rest"].RESTClient = _patch_rest(
+        accounts=[_make_account("USD", 1000.0)],
+        preview_error={"message": "INSUFFICIENT_FUND"},
+    )
+
+    original = config._raw
+    config._raw = _live_config(ks_file)
+    config._raw["live"] = {"test_order_notional_usd": 10.0}
+    try:
+        from bot.readiness import check_readiness
+        ready, blockers, _ = check_readiness()
+        assert not ready
+        assert any("preview failed" in b.lower() for b in blockers), blockers
+    finally:
+        config._raw = original
+
+
+def test_runtime_readiness_ignores_entry_halt_and_strategy_authorization(
+    monkeypatch, tmp_path
+):
+    """A halted BUY lane must still be restartable for data and exits."""
+    ks_file = str(tmp_path / "KILL_SWITCH")
+    open(ks_file, "w").close()
+    monkeypatch.setenv("COINBASE_API_KEY", "test_key")
+    monkeypatch.setenv("COINBASE_API_SECRET", "test_secret")
+    monkeypatch.setenv("LIVE_TRADING_CONFIRMED", "true")
+    sys.modules["coinbase.rest"].RESTClient = _patch_rest(
+        accounts=[_make_account("USD", 1000.0)]
+    )
+
+    original = config._raw
+    config._raw = _live_config(ks_file)
+    config._raw["safety"]["require_strategy_authorization"] = True
+    config._raw["strategy"] = {
+        "id": "failed_strategy",
+        "version": "1",
+        "authorization_file": str(tmp_path / "MISSING.json"),
+    }
+    try:
+        from bot.readiness import check_runtime_readiness
+
+        ready, blockers, _ = check_runtime_readiness()
+        assert ready is True
+        assert blockers == []
     finally:
         config._raw = original
 

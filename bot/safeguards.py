@@ -45,6 +45,7 @@ class Safeguards:
         kill_switch_file: str = "KILL_SWITCH",
         max_order_size_usd: float = 500.0,
         max_position_size_usd: float = 1000.0,
+        require_strategy_authorization: bool = False,
     ):
         self.ws_stale_timeout_sec = ws_stale_timeout_sec
         self.max_daily_loss_fraction = max_daily_loss_fraction
@@ -52,6 +53,7 @@ class Safeguards:
         self.kill_switch_file = kill_switch_file
         self.max_order_size_usd = max_order_size_usd
         self.max_position_size_usd = max_position_size_usd
+        self.require_strategy_authorization = require_strategy_authorization
 
         # Load persisted state; config value wins if not previously overridden
         persisted = Journal.get_state(_STATE_KEY)
@@ -124,6 +126,8 @@ class Safeguards:
         """
         stale = self._check_stale_stream()
         if self._check_kill_switch():
+            return False
+        if self._check_strategy_authorization():
             return False
         if not self._trading_enabled:
             return False
@@ -215,14 +219,32 @@ class Safeguards:
         return False
 
     def _check_kill_switch(self) -> bool:
-        """Returns True (blocked) if the kill switch file exists on disk."""
+        """Returns True when the operator entry-halt file exists on disk."""
         if os.path.exists(self.kill_switch_file):
             self._disable(
                 "kill_switch",
-                f"Kill switch file '{self.kill_switch_file}' is present. "
-                "Remove the file and restart to resume trading.",
+                f"Entry-halt file '{self.kill_switch_file}' is present. "
+                "New BUY exposure is blocked; risk-reducing exits remain enabled.",
             )
             return True
+        return False
+
+    def _check_strategy_authorization(self) -> bool:
+        """Block entries until a matching, unexpired strategy artifact exists."""
+        if not self.require_strategy_authorization:
+            return False
+        from .strategy_authorization import validate_configured_authorization
+
+        authorized, reason, _ = validate_configured_authorization()
+        if not authorized:
+            self._disable("strategy_authorization", reason)
+            return True
+        if "strategy_authorization" in self._tripped:
+            self._tripped.discard("strategy_authorization")
+            if not self._tripped:
+                self._trading_enabled = True
+            self._persist()
+            logger.info("Safeguards: valid strategy authorization detected.")
         return False
 
     def _check_daily_loss(self) -> bool:

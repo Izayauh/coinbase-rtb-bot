@@ -1,0 +1,20 @@
+[Unit]
+Description=Coinbase shadow research shard loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=crypto-research
+Group=crypto-research
+WorkingDirectory=/opt/crypto-research
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/crypto-research/venv/bin/python -m research_pipeline.cli.run_cloud_shard --seconds 10800 --work-dir /var/lib/crypto-research --bucket bitwise-trader-research-589900489794 --project bitwise-trader --prefix coinbase/BTC-USD/shards
+Restart=always
+RestartSec=60
+StateDirectory=crypto-research
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

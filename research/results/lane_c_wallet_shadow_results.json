@@ -1,0 +1,54 @@
+{
+  "timestamp": "2026-04-08T17:20:37.311362+00:00",
+  "wallet_csv": "research\\examples\\lane_c_wallet_events_sample.csv",
+  "timeframe": "1h",
+  "parameters": {
+    "delay_hours": 4,
+    "consensus_window_hours": 24,
+    "min_wallets": 2,
+    "min_consensus_score": 2.0,
+    "min_liquidity_usd": 1000000.0,
+    "min_notional_usd": 1000.0,
+    "time_stop_bars": 168
+  },
+  "ingest_stats": {
+    "rows_seen": 8,
+    "rows_kept": 4,
+    "drop_unmapped_symbol": 1,
+    "drop_entity_flag": 1,
+    "drop_action": 1,
+    "drop_notional": 1
+  },
+  "symbols_tested": [
+    "ETH-USD",
+    "SOL-USD"
+  ],
+  "results": [
+    {
+      "symbol": "ETH-USD",
+      "status": "ok",
+      "events_after_filter": 2,
+      "consensus_events": 1,
+      "signals": 1,
+      "trade_count": 1,
+      "win_rate": 1.0,
+      "profit_factor": null,
+      "expectancy_pct": 0.033411768907544714,
+      "total_return_pct": 1.345319669523315,
+      "max_drawdown_pct": 0.050268219975587274
+    },
+    {
+      "symbol": "SOL-USD",
+      "status": "ok",
+      "events_after_filter": 2,
+      "consensus_events": 1,
+      "signals": 1,
+      "trade_count": 1,
+      "win_rate": 1.0,
+      "profit_factor": null,
+      "expectancy_pct": 0.03794175808365199,
+      "total_return_pct": 1.3617195141832683,
+      "max_drawdown_pct": 0.04480615680822666
+    }
+  ]
+}

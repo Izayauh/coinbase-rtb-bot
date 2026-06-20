@@ -30,6 +30,7 @@ class _FakeMDProcessor:
 
 
 def _make_safeguards(trading_enabled=True, ws_timeout=15, **kw):
+    kw.setdefault("kill_switch_file", "KILL_SWITCH_TEST_ABSENT")
     return Safeguards(
         trading_enabled=trading_enabled,
         ws_stale_timeout_sec=ws_timeout,

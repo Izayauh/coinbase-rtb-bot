@@ -20,9 +20,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from bot.readiness import parse_coinbase_balances
+from bot.credentials import refresh_coinbase_credentials_from_user_environment
 
 
 def main() -> int:
+    refresh_coinbase_credentials_from_user_environment()
     api_key = os.environ.get("COINBASE_API_KEY", "")
     api_secret = os.environ.get("COINBASE_API_SECRET", "")
 

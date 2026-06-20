@@ -54,6 +54,37 @@ class StateMachine:
             "retest_bar": self.retest_bar.__dict__ if self.retest_bar else None
         })
 
+    @staticmethod
+    def _contiguous(bars: List[Bar], interval: int, minimum: int) -> bool:
+        if len(bars) < minimum:
+            return False
+        recent = bars[-minimum:]
+        return all(
+            recent[i].ts_open - recent[i - 1].ts_open == interval
+            for i in range(1, len(recent))
+        )
+
+    def recover_from_history(self, bars_1h: List[Bar], bars_4h: List[Bar]) -> bool:
+        """Safely clear a gap-disable after REST history is contiguous again.
+
+        Recovery discards any in-progress setup and starts evaluating only on
+        the next newly closed hourly bar. It never creates a historical signal.
+        """
+        if self.state != self.DISABLED:
+            return True
+        if not self._contiguous(bars_1h, 3600, 25):
+            return False
+        if not self._contiguous(bars_4h, 14400, 205):
+            return False
+        self._reset_to_idle()
+        self.last_1h_ts = bars_1h[-1].ts_open
+        self.last_4h_ts = bars_4h[-1].ts_open
+        self._persist()
+        logger.warning(
+            "Strategy recovered from DISABLED after contiguous REST history verification."
+        )
+        return True
+
     def process_bars(self, bars_1h: List[Bar], bars_4h: List[Bar]):
         if self.state == self.DISABLED:
             return

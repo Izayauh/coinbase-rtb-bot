@@ -66,6 +66,7 @@ def _make_safeguards(**kw) -> Safeguards:
         ws_stale_timeout_sec=15,
         max_daily_loss_fraction=0.015,
         portfolio_value=10000.0,
+        kill_switch_file="KILL_SWITCH_TEST_ABSENT",
         max_order_size_usd=10000.0,
         max_position_size_usd=100000.0,
     )
