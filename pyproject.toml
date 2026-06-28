@@ -1,4 +1,6 @@
 [tool.pytest.ini_options]
-# bot/tests first (existing live-bot coverage is unchanged). research suites are
-# additive — see docs/research_pipeline/ARCHITECTURE_REVIEW.md finding F-H1.
-testpaths = ["bot/tests", "research/tests", "research_pipeline/tests"]
+# bot/tests first (existing live-bot coverage is unchanged). research_pipeline
+# suites are additive — see docs/research_pipeline/ARCHITECTURE_REVIEW.md finding
+# F-H1. The legacy research/ lane suite moved to archive/research_lanes/ and is
+# intentionally no longer collected.
+testpaths = ["bot/tests", "research_pipeline/tests"]

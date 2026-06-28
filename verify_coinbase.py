@@ -58,7 +58,7 @@ def main() -> int:
         print()
         print("Common causes:")
         print("  - Invalid key ID or secret PEM")
-        print("  - PEM has literal \\n instead of real newlines (run diagnose_key.py)")
+        print("  - PEM has literal \\n instead of real newlines (run archive/scripts/diagnose_key.py)")
         print("  - Key does not have 'view' permissions on the target portfolio")
         return 1
 
